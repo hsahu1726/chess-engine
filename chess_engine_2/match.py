@@ -153,6 +153,31 @@ class RandomPlayer:
 
 
 @dataclass
+class NeuralPolicyPlayer:
+    name: str
+    checkpoint: Path
+    channels: int = 32
+    stats: PlayerStats = field(default_factory=PlayerStats)
+    policy_scorer: object = field(init=False)
+
+    def __post_init__(self) -> None:
+        from chess_engine_2.neural import NeuralPolicyScorer
+
+        self.policy_scorer = NeuralPolicyScorer.from_checkpoint(self.checkpoint, self.channels)
+
+    def choose_move(self, board: chess.Board) -> chess.Move | None:
+        legal_moves = list(board.legal_moves)
+        if not legal_moves:
+            return None
+
+        start = time.perf_counter()
+        scores = self.policy_scorer.score_moves(board)
+        move = max(legal_moves, key=lambda candidate: scores.get(candidate, float("-inf")))
+        self.stats.record(0, 1, time.perf_counter() - start)
+        return move
+
+
+@dataclass
 class GameResult:
     white: str
     black: str
@@ -363,6 +388,10 @@ def build_player(
 ) -> Player:
     if kind == "random":
         return RandomPlayer()
+    if kind == "neural":
+        if neural_checkpoint is None:
+            raise ValueError("neural player requires a neural checkpoint")
+        return NeuralPolicyPlayer("neural-policy", neural_checkpoint, neural_channels)
     if kind == "search":
         suffix = f"-{movetime_ms}ms" if movetime_ms is not None else ""
         mobility_suffix = "" if use_mobility else "-no-mobility"
@@ -384,8 +413,8 @@ def build_player(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run engine-vs-engine matches.")
-    parser.add_argument("--a", choices=["search", "random"], default="search")
-    parser.add_argument("--b", choices=["search", "random"], default="random")
+    parser.add_argument("--a", choices=["search", "random", "neural"], default="search")
+    parser.add_argument("--b", choices=["search", "random", "neural"], default="random")
     parser.add_argument("--a-depth", type=int, default=2)
     parser.add_argument("--b-depth", type=int, default=1)
     parser.add_argument("--a-movetime", type=int)

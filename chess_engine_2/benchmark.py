@@ -375,7 +375,7 @@ def main() -> None:
         help="Cumulative game checkpoints.",
     )
     parser.add_argument("--max-plies", type=int, default=200)
-    parser.add_argument("--opponent", choices=["search", "random"], default="random")
+    parser.add_argument("--opponent", choices=["search", "random", "neural"], default="random")
     parser.add_argument("--opponent-depth", type=int, default=1)
     parser.add_argument("--movetime", type=int, help="Per-move time limit for benchmarked search player.")
     parser.add_argument("--opponent-movetime", type=int, help="Per-move time limit for search opponent.")

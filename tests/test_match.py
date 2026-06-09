@@ -2,8 +2,10 @@ import chess
 
 from chess_engine_2.match import (
     GameResult,
+    NeuralPolicyPlayer,
     RandomPlayer,
     SearchPlayer,
+    build_player,
     game_points_for,
     play_game,
     play_match,
@@ -83,6 +85,33 @@ def test_search_player_accepts_policy_scorer() -> None:
 
     assert move in board.legal_moves
     assert scorer.calls > 0
+
+
+def test_neural_policy_player_chooses_highest_scored_legal_move() -> None:
+    class FakePolicyScorer:
+        def score_moves(self, board: chess.Board):
+            return {
+                chess.Move.from_uci("a2a3"): 1.0,
+                chess.Move.from_uci("e2e4"): 5.0,
+            }
+
+    player = NeuralPolicyPlayer.__new__(NeuralPolicyPlayer)
+    player.name = "neural-policy"
+    player.checkpoint = None
+    player.channels = 32
+    player.stats = RandomPlayer().stats
+    player.policy_scorer = FakePolicyScorer()
+
+    assert player.choose_move(chess.Board()) == chess.Move.from_uci("e2e4")
+
+
+def test_build_player_rejects_neural_without_checkpoint() -> None:
+    try:
+        build_player("neural", depth=1)
+    except ValueError as exc:
+        assert "checkpoint" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
 
 
 def test_save_match_pgn_writes_games(tmp_path) -> None:
