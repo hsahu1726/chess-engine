@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+match_smoke.pgn
+match_*.pgn
+benchmark*.csv
+data/raw/
+data/processed/
+models/

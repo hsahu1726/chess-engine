@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chess-engine-2"
+version = "0.1.0"
+description = "Python prototype for an Lc0-inspired chess engine path."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "python-chess>=1.999",
+    "zstandard>=0.23",
+    "torch>=2.12",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+chess-engine-2 = "chess_engine_2.uci:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
