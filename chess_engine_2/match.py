@@ -9,7 +9,7 @@ from typing import Protocol
 import chess
 import chess.pgn
 
-from chess_engine_2.engine import RandomEngine, SearchEngine
+from chess_engine_2.engine import PIECE_VALUES, RandomEngine, SearchEngine, evaluate
 
 
 class Player(Protocol):
@@ -29,6 +29,8 @@ class PlayerStats:
     total_seconds: float = 0.0
     total_evaluations: int = 0
     total_mobility_evaluations: int = 0
+    total_neural_value_evaluations: int = 0
+    total_neural_value_cache_hits: int = 0
 
     @property
     def average_depth(self) -> float:
@@ -58,6 +60,14 @@ class PlayerStats:
     def average_mobility_evaluations(self) -> float:
         return self.total_mobility_evaluations / self.moves if self.moves else 0.0
 
+    @property
+    def average_neural_value_evaluations(self) -> float:
+        return self.total_neural_value_evaluations / self.moves if self.moves else 0.0
+
+    @property
+    def average_neural_value_cache_hits(self) -> float:
+        return self.total_neural_value_cache_hits / self.moves if self.moves else 0.0
+
     def record(
         self,
         depth: int,
@@ -67,6 +77,8 @@ class PlayerStats:
         mobility_evaluations: int = 0,
         main_nodes: int = 0,
         quiescence_nodes: int = 0,
+        neural_value_evaluations: int = 0,
+        neural_value_cache_hits: int = 0,
     ) -> None:
         self.moves += 1
         self.total_depth += depth
@@ -76,6 +88,8 @@ class PlayerStats:
         self.total_seconds += seconds
         self.total_evaluations += evaluations
         self.total_mobility_evaluations += mobility_evaluations
+        self.total_neural_value_evaluations += neural_value_evaluations
+        self.total_neural_value_cache_hits += neural_value_cache_hits
 
 
 @dataclass
@@ -90,15 +104,28 @@ class SearchPlayer:
     neural_channels: int = 32
     neural_ordering_mode: str = "root"
     neural_min_depth: int = 2
+    value_checkpoint: Path | None = None
+    evaluation_mode: str = "classical"
+    neural_value_weight: float = 0.2
+    neural_value_scale: int = 1000
     stats: PlayerStats = field(default_factory=PlayerStats)
     engine: SearchEngine = field(init=False)
     policy_scorer: object | None = field(init=False, default=None)
+    value_evaluator: object | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         if self.neural_checkpoint is not None:
             from chess_engine_2.neural import NeuralPolicyScorer
 
             self.policy_scorer = NeuralPolicyScorer.from_checkpoint(self.neural_checkpoint, self.neural_channels)
+        if self.value_checkpoint is not None:
+            from chess_engine_2.neural import NeuralValueEvaluator
+
+            self.value_evaluator = NeuralValueEvaluator.from_checkpoint(
+                self.value_checkpoint,
+                self.neural_channels,
+                scale=self.neural_value_scale,
+            )
         self.reset_for_new_game()
 
     def reset_for_new_game(self) -> None:
@@ -110,6 +137,9 @@ class SearchPlayer:
             policy_scorer=self.policy_scorer,
             policy_ordering_mode=self.neural_ordering_mode,
             policy_ordering_min_depth=self.neural_min_depth,
+            value_evaluator=self.value_evaluator,
+            evaluation_mode=self.evaluation_mode,
+            neural_value_weight=self.neural_value_weight,
         )
 
     def choose_move(self, board: chess.Board) -> chess.Move | None:
@@ -120,6 +150,9 @@ class SearchPlayer:
         self.engine.policy_scorer = self.policy_scorer
         self.engine.policy_ordering_mode = self.neural_ordering_mode
         self.engine.policy_ordering_min_depth = self.neural_min_depth
+        self.engine.value_evaluator = self.value_evaluator
+        self.engine.evaluation_mode = self.evaluation_mode
+        self.engine.neural_value_weight = self.neural_value_weight
         start = time.perf_counter()
         if self.movetime_ms is None:
             result = self.engine.search(board, self.depth)
@@ -135,6 +168,8 @@ class SearchPlayer:
             self.engine.mobility_calls,
             result.main_nodes,
             result.quiescence_nodes,
+            self.engine.neural_value_calls,
+            self.engine.neural_value_cache_hits,
         )
         return result.move
 
@@ -175,6 +210,24 @@ class NeuralPolicyPlayer:
         move = max(legal_moves, key=lambda candidate: scores.get(candidate, float("-inf")))
         self.stats.record(0, 1, time.perf_counter() - start)
         return move
+
+
+@dataclass(frozen=True)
+class AdjudicationConfig:
+    enabled: bool = False
+    eval_threshold: int = 500
+    eval_plies: int = 8
+    material_threshold: int = 900
+    material_plies: int = 8
+    min_plies: int = 20
+
+
+@dataclass
+class AdjudicationState:
+    eval_winner: chess.Color | None = None
+    eval_count: int = 0
+    material_winner: chess.Color | None = None
+    material_count: int = 0
 
 
 @dataclass
@@ -250,6 +303,11 @@ class MatchResult:
                     f"{self.player_a_stats.average_mobility_evaluations:.0f}"
                 ),
                 (
+                    f"{self.player_a} avg neural value/cache hits: "
+                    f"{self.player_a_stats.average_neural_value_evaluations:.0f} / "
+                    f"{self.player_a_stats.average_neural_value_cache_hits:.0f}"
+                ),
+                (
                     f"{self.player_b} avg depth/nodes/nps: "
                     f"{self.player_b_stats.average_depth:.2f} / "
                     f"{self.player_b_stats.average_nodes:.0f} / "
@@ -264,6 +322,11 @@ class MatchResult:
                     f"{self.player_b} avg evals/mobility evals: "
                     f"{self.player_b_stats.average_evaluations:.0f} / "
                     f"{self.player_b_stats.average_mobility_evaluations:.0f}"
+                ),
+                (
+                    f"{self.player_b} avg neural value/cache hits: "
+                    f"{self.player_b_stats.average_neural_value_evaluations:.0f} / "
+                    f"{self.player_b_stats.average_neural_value_cache_hits:.0f}"
                 ),
                 f"terminations: {format_termination_counts(self.termination_counts)}",
             ]
@@ -283,6 +346,7 @@ def play_game(
     max_plies: int = 200,
     record_pgn: bool = True,
     opening_plies: int = 0,
+    adjudication: AdjudicationConfig | None = None,
 ) -> GameResult:
     reset_player_for_new_game(white)
     reset_player_for_new_game(black)
@@ -293,6 +357,8 @@ def play_game(
         game.headers["White"] = white.name
         game.headers["Black"] = black.name
     players = {chess.WHITE: white, chess.BLACK: black}
+    adjudication_config = adjudication or AdjudicationConfig()
+    adjudication_state = AdjudicationState()
 
     for _ in range(opening_plies):
         legal_moves = list(board.legal_moves)
@@ -304,6 +370,13 @@ def play_game(
         if node is not None:
             node = node.add_variation(move)
         board.push(move)
+        adjudicated = adjudicate_game(board, adjudication_config, adjudication_state)
+        if adjudicated is not None:
+            result, termination = adjudicated
+            if game is not None:
+                game.headers["Result"] = result
+                game.headers["Termination"] = termination
+            return GameResult(white.name, black.name, result, board.ply(), termination, str(game or ""))
 
     while not board.is_game_over(claim_draw=True) and board.ply() < max_plies:
         player = players[board.turn]
@@ -344,6 +417,7 @@ def play_match(
     max_plies: int = 200,
     record_pgn: bool = True,
     opening_plies: int = 0,
+    adjudication: AdjudicationConfig | None = None,
 ) -> MatchResult:
     game_results = []
     for game_index in range(games):
@@ -351,7 +425,7 @@ def play_match(
             white, black = player_a, player_b
         else:
             white, black = player_b, player_a
-        game_results.append(play_game(white, black, max_plies, record_pgn, opening_plies))
+        game_results.append(play_game(white, black, max_plies, record_pgn, opening_plies, adjudication))
 
     return MatchResult(game_results, player_a.name, player_b.name, player_a.stats, player_b.stats)
 
@@ -364,6 +438,74 @@ def game_points_for(player_name: str, game: GameResult) -> float:
     if game.result == "0-1":
         return 1.0 if game.black == player_name else 0.0
     return 0.0
+
+
+def adjudicate_game(
+    board: chess.Board,
+    config: AdjudicationConfig,
+    state: AdjudicationState,
+) -> tuple[str, str] | None:
+    if not config.enabled or board.ply() < config.min_plies:
+        return None
+
+    state.eval_winner, state.eval_count = update_consecutive_winner(
+        state.eval_winner,
+        state.eval_count,
+        white_relative_eval(board),
+        config.eval_threshold,
+    )
+    if state.eval_winner is not None and state.eval_count >= config.eval_plies:
+        return result_for_winner(state.eval_winner), "adjudicated eval"
+
+    state.material_winner, state.material_count = update_consecutive_winner(
+        state.material_winner,
+        state.material_count,
+        material_score(board),
+        config.material_threshold,
+    )
+    if state.material_winner is not None and state.material_count >= config.material_plies:
+        return result_for_winner(state.material_winner), "adjudicated material"
+
+    return None
+
+
+def update_consecutive_winner(
+    current_winner: chess.Color | None,
+    current_count: int,
+    white_score: int,
+    threshold: int,
+) -> tuple[chess.Color | None, int]:
+    winner = score_winner(white_score, threshold)
+    if winner is None:
+        return None, 0
+    if winner == current_winner:
+        return winner, current_count + 1
+    return winner, 1
+
+
+def white_relative_eval(board: chess.Board) -> int:
+    score = evaluate(board)
+    return score if board.turn == chess.WHITE else -score
+
+
+def material_score(board: chess.Board) -> int:
+    score = 0
+    for piece in board.piece_map().values():
+        value = PIECE_VALUES[piece.piece_type]
+        score += value if piece.color == chess.WHITE else -value
+    return score
+
+
+def score_winner(white_score: int, threshold: int) -> chess.Color | None:
+    if white_score >= threshold:
+        return chess.WHITE
+    if white_score <= -threshold:
+        return chess.BLACK
+    return None
+
+
+def result_for_winner(winner: chess.Color) -> str:
+    return "1-0" if winner == chess.WHITE else "0-1"
 
 
 def format_termination_counts(counts: dict[str, int]) -> str:
@@ -385,6 +527,10 @@ def build_player(
     neural_channels: int = 32,
     neural_ordering_mode: str = "root",
     neural_min_depth: int = 2,
+    value_checkpoint: Path | None = None,
+    evaluation_mode: str = "classical",
+    neural_value_weight: float = 0.2,
+    neural_value_scale: int = 1000,
 ) -> Player:
     if kind == "random":
         return RandomPlayer()
@@ -407,6 +553,10 @@ def build_player(
             neural_channels,
             neural_ordering_mode,
             neural_min_depth,
+            value_checkpoint,
+            evaluation_mode,
+            neural_value_weight,
+            neural_value_scale,
         )
     raise ValueError(f"unknown player kind: {kind}")
 
@@ -427,10 +577,21 @@ def main() -> None:
     parser.add_argument("--neural-channels", type=int, default=32)
     parser.add_argument("--neural-ordering", choices=["root", "depth", "all"], default="root")
     parser.add_argument("--neural-min-depth", type=int, default=2)
+    parser.add_argument("--a-value-checkpoint", type=Path)
+    parser.add_argument("--b-value-checkpoint", type=Path)
+    parser.add_argument("--evaluation-mode", choices=["classical", "neural", "blend"], default="classical")
+    parser.add_argument("--neural-value-weight", type=float, default=0.2)
+    parser.add_argument("--neural-value-scale", type=int, default=1000)
     parser.add_argument("--no-mobility", action="store_true")
     parser.add_argument("--games", type=int, default=2)
     parser.add_argument("--max-plies", type=int, default=200)
     parser.add_argument("--opening-plies", type=int, default=0)
+    parser.add_argument("--adjudicate", action="store_true")
+    parser.add_argument("--adjudicate-eval", type=int, default=500)
+    parser.add_argument("--adjudicate-eval-plies", type=int, default=8)
+    parser.add_argument("--adjudicate-material", type=int, default=900)
+    parser.add_argument("--adjudicate-material-plies", type=int, default=8)
+    parser.add_argument("--adjudicate-min-plies", type=int, default=20)
     parser.add_argument("--pgn", type=Path)
     args = parser.parse_args()
 
@@ -447,6 +608,10 @@ def main() -> None:
         max(1, args.neural_channels),
         args.neural_ordering,
         max(1, args.neural_min_depth),
+        args.a_value_checkpoint,
+        args.evaluation_mode,
+        args.neural_value_weight,
+        max(1, args.neural_value_scale),
     )
     player_b = build_player(
         args.b,
@@ -459,6 +624,10 @@ def main() -> None:
         max(1, args.neural_channels),
         args.neural_ordering,
         max(1, args.neural_min_depth),
+        args.b_value_checkpoint,
+        args.evaluation_mode,
+        args.neural_value_weight,
+        max(1, args.neural_value_scale),
     )
     result = play_match(
         player_a,
@@ -467,6 +636,14 @@ def main() -> None:
         max(1, args.max_plies),
         record_pgn=args.pgn is not None,
         opening_plies=max(0, args.opening_plies),
+        adjudication=AdjudicationConfig(
+            enabled=args.adjudicate,
+            eval_threshold=max(1, args.adjudicate_eval),
+            eval_plies=max(1, args.adjudicate_eval_plies),
+            material_threshold=max(1, args.adjudicate_material),
+            material_plies=max(1, args.adjudicate_material_plies),
+            min_plies=max(0, args.adjudicate_min_plies),
+        ),
     )
     if args.pgn is not None:
         save_match_pgn(result, args.pgn)

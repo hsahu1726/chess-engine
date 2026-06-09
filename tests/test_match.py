@@ -1,15 +1,20 @@
 import chess
 
 from chess_engine_2.match import (
+    AdjudicationConfig,
+    AdjudicationState,
     GameResult,
     NeuralPolicyPlayer,
     RandomPlayer,
     SearchPlayer,
+    adjudicate_game,
     build_player,
     game_points_for,
+    material_score,
     play_game,
     play_match,
     save_match_pgn,
+    white_relative_eval,
 )
 
 
@@ -45,6 +50,43 @@ def test_game_points_for_player() -> None:
     assert game_points_for("a", white_win) == 1.0
     assert game_points_for("a", black_win) == 0.0
     assert game_points_for("a", draw) == 0.5
+
+
+def test_white_relative_eval_is_positive_for_white_advantage() -> None:
+    board = chess.Board("4k3/8/8/8/8/8/8/4KQ2 w - - 0 1")
+
+    assert white_relative_eval(board) > 800
+    board.turn = chess.BLACK
+    assert white_relative_eval(board) > 800
+
+
+def test_material_score_is_white_relative() -> None:
+    assert material_score(chess.Board("4k3/8/8/8/8/8/8/4KQ2 w - - 0 1")) == 900
+    assert material_score(chess.Board("4kq2/8/8/8/8/8/8/4K3 w - - 0 1")) == -900
+
+
+def test_adjudicate_game_declares_eval_win_after_consecutive_plies() -> None:
+    board = chess.Board("4k3/8/8/8/8/8/8/4KQ2 w - - 0 10")
+    state = AdjudicationState()
+    config = AdjudicationConfig(enabled=True, eval_threshold=500, eval_plies=2, min_plies=0)
+
+    assert adjudicate_game(board, config, state) is None
+    assert adjudicate_game(board, config, state) == ("1-0", "adjudicated eval")
+
+
+def test_adjudicate_game_declares_material_win_after_consecutive_plies() -> None:
+    board = chess.Board("4k3/8/8/8/8/8/8/4KQ2 w - - 0 10")
+    state = AdjudicationState()
+    config = AdjudicationConfig(
+        enabled=True,
+        eval_threshold=10_000,
+        material_threshold=500,
+        material_plies=2,
+        min_plies=0,
+    )
+
+    assert adjudicate_game(board, config, state) is None
+    assert adjudicate_game(board, config, state) == ("1-0", "adjudicated material")
 
 
 def test_match_summary_includes_score() -> None:
