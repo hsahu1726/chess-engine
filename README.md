@@ -22,10 +22,11 @@ alpha-beta search, supervised policy/value training, and eventually PUCT MCTS.
 12. Lichess PGN downloader and parser. Done.
 13. PyTorch policy/value network. Done.
 14. Neural policy move ordering for alpha-beta search. Done.
-15. Neural-only move selection.
-16. Value network inside search.
-17. PUCT MCTS.
-18. Self-play training loop.
+15. Neural-only move selection. Done.
+16. Larger 1,000-game neural training run. Done.
+17. Value network inside search.
+18. PUCT MCTS.
+19. Self-play training loop.
 
 ## Setup
 
@@ -105,6 +106,14 @@ Train the first small policy/value network:
 python -m chess_engine_2.train data/processed/lichess_2013-02_100.jsonl --epochs 3 --batch-size 64 --checkpoint models/policy_value_smoke.pt
 ```
 
+Train the larger 1,000-game Phase 10 checkpoint:
+
+```powershell
+python -m chess_engine_2.data.pgn data/raw/lichess_db_standard_rated_2013-02.pgn.zst --max-games 1000 --output data/processed/lichess_2013-02_1000.jsonl
+python -m chess_engine_2.data.dataset data/processed/lichess_2013-02_1000.jsonl
+python -m chess_engine_2.train data/processed/lichess_2013-02_1000.jsonl --epochs 3 --batch-size 256 --channels 32 --checkpoint models/policy_value_phase10_1000.pt
+```
+
 Inspect the trained policy on a position:
 
 ```powershell
@@ -121,6 +130,12 @@ The default neural ordering mode is root-only. You can also test deeper modes:
 
 ```powershell
 python -m chess_engine_2.benchmark --depths 2 --games-list 2 --opponent search --opponent-depth 2 --max-plies 40 --neural-checkpoint models/policy_value_phase7.pt --neural-ordering all
+```
+
+Run a neural-policy-only player with no search:
+
+```powershell
+python -m chess_engine_2.match --a neural --a-neural-checkpoint models/policy_value_phase7.pt --b random --games 4 --max-plies 80
 ```
 
 ## Match Testing
