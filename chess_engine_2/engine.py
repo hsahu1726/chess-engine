@@ -22,6 +22,9 @@ NEURAL_POLICY_ORDER_SCALE = 100
 NEURAL_ORDER_ROOT = "root"
 NEURAL_ORDER_DEPTH = "depth"
 NEURAL_ORDER_ALL = "all"
+EVALUATION_CLASSICAL = "classical"
+EVALUATION_NEURAL = "neural"
+EVALUATION_BLEND = "blend"
 
 PIECE_VALUES = {
     chess.PAWN: 100,
@@ -572,6 +575,11 @@ class MovePolicyScorer(Protocol):
         ...
 
 
+class ValueEvaluator(Protocol):
+    def evaluate(self, board: chess.Board) -> int:
+        ...
+
+
 @dataclass
 class SearchEngine:
     max_depth: int = 4
@@ -583,6 +591,8 @@ class SearchEngine:
     evaluate_calls: int = 0
     mobility_calls: int = 0
     policy_ordering_calls: int = 0
+    neural_value_calls: int = 0
+    neural_value_cache_hits: int = 0
     time_check_interval: int = 1024
     transposition_table: dict[tuple[object, int], TranspositionEntry] = field(default_factory=dict)
     killer_moves: dict[int, list[chess.Move]] = field(default_factory=dict)
@@ -590,6 +600,10 @@ class SearchEngine:
     policy_scorer: MovePolicyScorer | None = None
     policy_ordering_mode: str = NEURAL_ORDER_ROOT
     policy_ordering_min_depth: int = 2
+    value_evaluator: ValueEvaluator | None = None
+    evaluation_mode: str = EVALUATION_CLASSICAL
+    neural_value_weight: float = 0.2
+    neural_value_cache: dict[tuple[object, int], int] = field(default_factory=dict)
     deadline: float | None = None
 
     def choose_move(self, board: chess.Board, depth: int | None = None) -> chess.Move | None:
@@ -924,12 +938,37 @@ class SearchEngine:
         self.evaluate_calls = 0
         self.mobility_calls = 0
         self.policy_ordering_calls = 0
+        self.neural_value_calls = 0
+        self.neural_value_cache_hits = 0
 
     def evaluate(self, board: chess.Board) -> int:
         self.evaluate_calls += 1
-        if self.use_mobility:
+        if self.use_mobility and self.evaluation_mode != EVALUATION_NEURAL:
             self.mobility_calls += 1
-        return evaluate(board, use_mobility=self.use_mobility)
+        if self.value_evaluator is None or self.evaluation_mode == EVALUATION_CLASSICAL:
+            return evaluate(board, use_mobility=self.use_mobility)
+
+        if board.is_checkmate() or board.is_stalemate() or board.is_insufficient_material():
+            return evaluate(board, use_mobility=self.use_mobility)
+
+        neural_score = self._neural_value_score(board)
+        if self.evaluation_mode == EVALUATION_NEURAL:
+            return neural_score
+
+        classical_score = evaluate(board, use_mobility=self.use_mobility)
+        weight = min(1.0, max(0.0, self.neural_value_weight))
+        return int((1.0 - weight) * classical_score + weight * neural_score)
+
+    def _neural_value_score(self, board: chess.Board) -> int:
+        key = self._cache_key(board)
+        if key in self.neural_value_cache:
+            self.neural_value_cache_hits += 1
+            return self.neural_value_cache[key]
+
+        self.neural_value_calls += 1
+        score = self.value_evaluator.evaluate(board)
+        self.neural_value_cache[key] = score
+        return score
 
     def principal_variation(self, board: chess.Board, max_length: int | None = None) -> list[chess.Move]:
         max_ply = self.max_depth if max_length is None else max_length

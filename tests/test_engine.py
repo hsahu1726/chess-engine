@@ -196,6 +196,51 @@ def test_search_engine_uses_policy_scorer_for_root_ordering() -> None:
     assert scorer.calls > 0
 
 
+def test_search_engine_can_use_neural_value_evaluation() -> None:
+    class FakeValueEvaluator:
+        def evaluate(self, board: chess.Board) -> int:
+            return 123
+
+    engine = SearchEngine(value_evaluator=FakeValueEvaluator(), evaluation_mode="neural")
+
+    assert engine.evaluate(chess.Board()) == 123
+
+
+def test_search_engine_can_blend_classical_and_neural_value() -> None:
+    class FakeValueEvaluator:
+        def evaluate(self, board: chess.Board) -> int:
+            return 1000
+
+    board = chess.Board("4k3/8/8/8/8/8/8/4KQ2 w - - 0 1")
+    classical = evaluate(board)
+    engine = SearchEngine(
+        value_evaluator=FakeValueEvaluator(),
+        evaluation_mode="blend",
+        neural_value_weight=0.25,
+    )
+
+    assert engine.evaluate(board) == int(0.75 * classical + 0.25 * 1000)
+
+
+def test_search_engine_caches_neural_value_evaluation() -> None:
+    class FakeValueEvaluator:
+        calls = 0
+
+        def evaluate(self, board: chess.Board) -> int:
+            self.calls += 1
+            return 123
+
+    evaluator = FakeValueEvaluator()
+    engine = SearchEngine(value_evaluator=evaluator, evaluation_mode="neural")
+    board = chess.Board()
+
+    assert engine.evaluate(board) == 123
+    assert engine.evaluate(board) == 123
+    assert evaluator.calls == 1
+    assert engine.neural_value_calls == 1
+    assert engine.neural_value_cache_hits == 1
+
+
 def test_root_policy_ordering_calls_scorer_once_per_completed_depth() -> None:
     class FakePolicyScorer:
         calls = 0
