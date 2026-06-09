@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import chess
 import torch
@@ -20,6 +21,8 @@ class TrainingMetrics:
     policy_loss: float
     value_loss: float
     total_loss: float
+    policy_top1: float = 0.0
+    policy_top5: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -56,6 +59,33 @@ class NeuralPolicyScorer:
                 policy_index = move_to_policy_index(move, board)
                 scores[move] = float(policy_logits[0, policy_index].item())
         return scores
+
+
+class NeuralValueEvaluator:
+    def __init__(self, model: PolicyValueNet, device: torch.device, scale: int = 1000):
+        self.model = model
+        self.device = device
+        self.scale = scale
+
+    @classmethod
+    def from_checkpoint(
+        cls,
+        checkpoint: Path,
+        channels: int = 32,
+        device: torch.device | None = None,
+        scale: int = 1000,
+    ) -> "NeuralValueEvaluator":
+        resolved_device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = PolicyValueNet(channels=channels).to(resolved_device)
+        load_checkpoint(checkpoint, model, resolved_device)
+        return cls(model, resolved_device, scale)
+
+    def evaluate(self, board: chess.Board) -> int:
+        self.model.eval()
+        planes = torch.tensor(board_to_planes(board), dtype=torch.float32, device=self.device).unsqueeze(0)
+        with torch.no_grad():
+            _, value = self.model(planes)
+        return int(float(value[0].item()) * self.scale)
 
 
 class ChessJsonlDataset(Dataset):
@@ -161,12 +191,71 @@ def train_one_epoch(
     )
 
 
-def save_checkpoint(path: Path, model: PolicyValueNet, metrics: list[TrainingMetrics]) -> None:
+def evaluate_model(
+    model: PolicyValueNet,
+    loader,
+    device: torch.device,
+    value_loss_weight: float = 1.0,
+) -> TrainingMetrics:
+    model.eval()
+    policy_loss_fn = nn.CrossEntropyLoss()
+    value_loss_fn = nn.MSELoss()
+
+    total_samples = 0
+    total_batches = 0
+    policy_loss_sum = 0.0
+    value_loss_sum = 0.0
+    total_loss_sum = 0.0
+    top1_correct = 0
+    top5_correct = 0
+
+    with torch.no_grad():
+        for planes, policy_targets, value_targets in loader:
+            planes = planes.to(device)
+            policy_targets = policy_targets.to(device)
+            value_targets = value_targets.to(device)
+
+            policy_logits, value_predictions = model(planes)
+            policy_loss = policy_loss_fn(policy_logits, policy_targets)
+            value_loss = value_loss_fn(value_predictions, value_targets)
+            loss = policy_loss + value_loss_weight * value_loss
+
+            batch_size = planes.shape[0]
+            total_samples += batch_size
+            total_batches += 1
+            policy_loss_sum += policy_loss.item() * batch_size
+            value_loss_sum += value_loss.item() * batch_size
+            total_loss_sum += loss.item() * batch_size
+
+            top_predictions = torch.topk(policy_logits, k=5, dim=1).indices
+            top1_correct += (top_predictions[:, 0] == policy_targets).sum().item()
+            top5_correct += (top_predictions == policy_targets.unsqueeze(1)).any(dim=1).sum().item()
+
+    return TrainingMetrics(
+        samples=total_samples,
+        batches=total_batches,
+        policy_loss=policy_loss_sum / total_samples,
+        value_loss=value_loss_sum / total_samples,
+        total_loss=total_loss_sum / total_samples,
+        policy_top1=top1_correct / total_samples,
+        policy_top5=top5_correct / total_samples,
+    )
+
+
+def save_checkpoint(
+    path: Path,
+    model: PolicyValueNet,
+    metrics: list[TrainingMetrics],
+    metadata: dict[str, Any] | None = None,
+    validation_metrics: list[TrainingMetrics] | None = None,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
             "model_state": model.state_dict(),
             "metrics": [metric.__dict__ for metric in metrics],
+            "validation_metrics": [metric.__dict__ for metric in validation_metrics or []],
+            "metadata": metadata or {},
         },
         path,
     )
@@ -176,6 +265,16 @@ def load_checkpoint(path: Path, model: PolicyValueNet, device: torch.device | No
     checkpoint = torch.load(path, map_location=device or torch.device("cpu"))
     model.load_state_dict(checkpoint["model_state"])
     return [TrainingMetrics(**metric) for metric in checkpoint.get("metrics", [])]
+
+
+def load_checkpoint_metadata(path: Path, device: torch.device | None = None) -> dict[str, Any]:
+    checkpoint = torch.load(path, map_location=device or torch.device("cpu"))
+    return dict(checkpoint.get("metadata", {}))
+
+
+def load_validation_metrics(path: Path, device: torch.device | None = None) -> list[TrainingMetrics]:
+    checkpoint = torch.load(path, map_location=device or torch.device("cpu"))
+    return [TrainingMetrics(**metric) for metric in checkpoint.get("validation_metrics", [])]
 
 
 def predict_legal_moves(
