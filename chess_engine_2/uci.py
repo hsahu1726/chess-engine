@@ -180,15 +180,29 @@ def build_engine(
     neural_channels: int = 32,
     neural_ordering: str = "root",
     neural_min_depth: int = 2,
+    value_checkpoint: Path | None = None,
+    evaluation_mode: str = "classical",
+    neural_value_weight: float = 0.2,
+    neural_value_scale: int = 1000,
 ) -> SearchEngine:
     engine = SearchEngine(
         policy_ordering_mode=neural_ordering,
         policy_ordering_min_depth=max(1, neural_min_depth),
+        evaluation_mode=evaluation_mode,
+        neural_value_weight=neural_value_weight,
     )
     if neural_checkpoint is not None:
         from chess_engine_2.neural import NeuralPolicyScorer
 
         engine.policy_scorer = NeuralPolicyScorer.from_checkpoint(neural_checkpoint, max(1, neural_channels))
+    if value_checkpoint is not None:
+        from chess_engine_2.neural import NeuralValueEvaluator
+
+        engine.value_evaluator = NeuralValueEvaluator.from_checkpoint(
+            value_checkpoint,
+            max(1, neural_channels),
+            scale=max(1, neural_value_scale),
+        )
     return engine
 
 
@@ -198,6 +212,10 @@ def main() -> None:
     parser.add_argument("--neural-channels", type=int, default=32)
     parser.add_argument("--neural-ordering", choices=["root", "depth", "all"], default="root")
     parser.add_argument("--neural-min-depth", type=int, default=2)
+    parser.add_argument("--value-checkpoint", type=Path)
+    parser.add_argument("--evaluation-mode", choices=["classical", "neural", "blend"], default="classical")
+    parser.add_argument("--neural-value-weight", type=float, default=0.2)
+    parser.add_argument("--neural-value-scale", type=int, default=1000)
     args = parser.parse_args()
 
     UciSession(
@@ -206,6 +224,10 @@ def main() -> None:
             args.neural_channels,
             args.neural_ordering,
             args.neural_min_depth,
+            args.value_checkpoint,
+            args.evaluation_mode,
+            args.neural_value_weight,
+            args.neural_value_scale,
         )
     ).run()
 

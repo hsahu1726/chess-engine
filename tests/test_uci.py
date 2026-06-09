@@ -89,3 +89,11 @@ def test_build_engine_configures_neural_ordering_without_checkpoint() -> None:
     assert engine.policy_ordering_mode == "depth"
     assert engine.policy_ordering_min_depth == 3
     assert engine.policy_scorer is None
+
+
+def test_build_engine_configures_value_evaluation_mode_without_checkpoint() -> None:
+    engine = build_engine(evaluation_mode="blend", neural_value_weight=0.3)
+
+    assert engine.evaluation_mode == "blend"
+    assert engine.neural_value_weight == 0.3
+    assert engine.value_evaluator is None
