@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 import time
 from dataclasses import dataclass, field
+from typing import Protocol
 
 import chess
 
@@ -17,6 +18,10 @@ NULL_MOVE_REDUCTION = 2
 ASPIRATION_WINDOW = 50
 FUTILITY_MARGIN = 120
 LMR_MOVE_THRESHOLD = 4
+NEURAL_POLICY_ORDER_SCALE = 100
+NEURAL_ORDER_ROOT = "root"
+NEURAL_ORDER_DEPTH = "depth"
+NEURAL_ORDER_ALL = "all"
 
 PIECE_VALUES = {
     chess.PAWN: 100,
@@ -562,6 +567,11 @@ class SearchStopped(Exception):
     pass
 
 
+class MovePolicyScorer(Protocol):
+    def score_moves(self, board: chess.Board) -> dict[chess.Move, float]:
+        ...
+
+
 @dataclass
 class SearchEngine:
     max_depth: int = 4
@@ -572,10 +582,14 @@ class SearchEngine:
     quiescence_nodes: int = 0
     evaluate_calls: int = 0
     mobility_calls: int = 0
+    policy_ordering_calls: int = 0
     time_check_interval: int = 1024
     transposition_table: dict[tuple[object, int], TranspositionEntry] = field(default_factory=dict)
     killer_moves: dict[int, list[chess.Move]] = field(default_factory=dict)
     history_scores: dict[tuple[int, int, int | None], int] = field(default_factory=dict)
+    policy_scorer: MovePolicyScorer | None = None
+    policy_ordering_mode: str = NEURAL_ORDER_ROOT
+    policy_ordering_min_depth: int = 2
     deadline: float | None = None
 
     def choose_move(self, board: chess.Board, depth: int | None = None) -> chess.Move | None:
@@ -646,7 +660,7 @@ class SearchEngine:
         root_beta = beta
         best_score = -INFINITY
 
-        for move in ordered_moves(board, preferred_move):
+        for move in ordered_moves(board, preferred_move, policy_scores=self._root_policy_scores(board)):
             board.push(move)
             try:
                 score = -self._negamax(board, search_depth - 1, -root_beta, -root_alpha, ply=1, allow_null_move=True)
@@ -733,6 +747,7 @@ class SearchEngine:
             entry.best_move if entry is not None else None,
             self.killer_moves.get(ply, []),
             self.history_scores,
+            self._tree_policy_scores(board, depth),
         )
         static_eval = self.evaluate(board) if depth == 1 and not board.is_check() else None
 
@@ -884,12 +899,31 @@ class SearchEngine:
             self.quiescence_nodes,
         )
 
+    def _root_policy_scores(self, board: chess.Board) -> dict[chess.Move, float] | None:
+        if self.policy_ordering_mode in {NEURAL_ORDER_ROOT, NEURAL_ORDER_DEPTH, NEURAL_ORDER_ALL}:
+            return self._policy_scores(board)
+        return None
+
+    def _tree_policy_scores(self, board: chess.Board, depth: int) -> dict[chess.Move, float] | None:
+        if self.policy_ordering_mode == NEURAL_ORDER_ALL:
+            return self._policy_scores(board)
+        if self.policy_ordering_mode == NEURAL_ORDER_DEPTH and depth >= self.policy_ordering_min_depth:
+            return self._policy_scores(board)
+        return None
+
+    def _policy_scores(self, board: chess.Board) -> dict[chess.Move, float] | None:
+        if self.policy_scorer is None:
+            return None
+        self.policy_ordering_calls += 1
+        return self.policy_scorer.score_moves(board)
+
     def reset_search_counters(self) -> None:
         self.nodes = 0
         self.main_nodes = 0
         self.quiescence_nodes = 0
         self.evaluate_calls = 0
         self.mobility_calls = 0
+        self.policy_ordering_calls = 0
 
     def evaluate(self, board: chess.Board) -> int:
         self.evaluate_calls += 1
@@ -1112,10 +1146,11 @@ def ordered_moves(
     preferred_move: chess.Move | None = None,
     killer_moves: list[chess.Move] | None = None,
     history_scores: dict[tuple[int, int, int | None], int] | None = None,
+    policy_scores: dict[chess.Move, float] | None = None,
 ) -> list[chess.Move]:
     return sorted(
         board.legal_moves,
-        key=lambda move: move_order_score(board, move, preferred_move, killer_moves, history_scores),
+        key=lambda move: move_order_score(board, move, preferred_move, killer_moves, history_scores, policy_scores),
         reverse=True,
     )
 
@@ -1135,11 +1170,15 @@ def move_order_score(
     preferred_move: chess.Move | None = None,
     killer_moves: list[chess.Move] | None = None,
     history_scores: dict[tuple[int, int, int | None], int] | None = None,
+    policy_scores: dict[chess.Move, float] | None = None,
 ) -> int:
     score = 0
 
     if preferred_move == move:
         score += 10_000
+
+    if policy_scores is not None:
+        score += int(policy_scores.get(move, 0.0) * NEURAL_POLICY_ORDER_SCALE)
 
     if killer_moves is not None and move in killer_moves:
         score += 2_000

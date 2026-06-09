@@ -172,6 +172,58 @@ def test_history_score_improves_quiet_move_ordering() -> None:
     assert moves[0] == move
 
 
+def test_policy_score_improves_move_ordering() -> None:
+    board = chess.Board()
+    move = chess.Move.from_uci("a2a3")
+    moves = ordered_moves(board, policy_scores={move: 100.0})
+
+    assert moves[0] == move
+
+
+def test_search_engine_uses_policy_scorer_for_root_ordering() -> None:
+    class FakePolicyScorer:
+        calls = 0
+
+        def score_moves(self, board: chess.Board):
+            self.calls += 1
+            return {chess.Move.from_uci("a2a3"): 100.0}
+
+    board = chess.Board()
+    scorer = FakePolicyScorer()
+    result = SearchEngine(max_depth=1, policy_scorer=scorer).search(board)
+
+    assert result.move in board.legal_moves
+    assert scorer.calls > 0
+
+
+def test_root_policy_ordering_calls_scorer_once_per_completed_depth() -> None:
+    class FakePolicyScorer:
+        calls = 0
+
+        def score_moves(self, board: chess.Board):
+            self.calls += 1
+            return {}
+
+    scorer = FakePolicyScorer()
+    SearchEngine(max_depth=3, policy_scorer=scorer, policy_ordering_mode="root").search(chess.Board(), depth=3)
+
+    assert scorer.calls == 1
+
+
+def test_all_policy_ordering_calls_scorer_beyond_root() -> None:
+    class FakePolicyScorer:
+        calls = 0
+
+        def score_moves(self, board: chess.Board):
+            self.calls += 1
+            return {}
+
+    scorer = FakePolicyScorer()
+    SearchEngine(max_depth=2, policy_scorer=scorer, policy_ordering_mode="all").search(chess.Board(), depth=2)
+
+    assert scorer.calls > 1
+
+
 def test_search_records_move_ordering_heuristics() -> None:
     board = chess.Board()
     engine = SearchEngine(max_depth=3)

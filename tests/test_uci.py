@@ -5,6 +5,7 @@ import chess
 from chess_engine_2.uci import (
     UciSession,
     allocate_movetime,
+    build_engine,
     choose_movetime_from_clock,
     parse_go_depth,
     parse_go_int,
@@ -80,3 +81,11 @@ def test_go_clock_returns_bestmove() -> None:
 
     assert "bestmove " in output
     assert "bestmove 0000" not in output
+
+
+def test_build_engine_configures_neural_ordering_without_checkpoint() -> None:
+    engine = build_engine(neural_ordering="depth", neural_min_depth=3)
+
+    assert engine.policy_ordering_mode == "depth"
+    assert engine.policy_ordering_min_depth == 3
+    assert engine.policy_scorer is None

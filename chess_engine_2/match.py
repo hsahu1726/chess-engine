@@ -86,10 +86,19 @@ class SearchPlayer:
     use_mobility: bool = True
     quiescence_depth: int = 6
     time_check_interval: int = 1024
+    neural_checkpoint: Path | None = None
+    neural_channels: int = 32
+    neural_ordering_mode: str = "root"
+    neural_min_depth: int = 2
     stats: PlayerStats = field(default_factory=PlayerStats)
     engine: SearchEngine = field(init=False)
+    policy_scorer: object | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
+        if self.neural_checkpoint is not None:
+            from chess_engine_2.neural import NeuralPolicyScorer
+
+            self.policy_scorer = NeuralPolicyScorer.from_checkpoint(self.neural_checkpoint, self.neural_channels)
         self.reset_for_new_game()
 
     def reset_for_new_game(self) -> None:
@@ -98,6 +107,9 @@ class SearchPlayer:
             max_quiescence_depth=self.quiescence_depth,
             use_mobility=self.use_mobility,
             time_check_interval=self.time_check_interval,
+            policy_scorer=self.policy_scorer,
+            policy_ordering_mode=self.neural_ordering_mode,
+            policy_ordering_min_depth=self.neural_min_depth,
         )
 
     def choose_move(self, board: chess.Board) -> chess.Move | None:
@@ -105,6 +117,9 @@ class SearchPlayer:
         self.engine.max_quiescence_depth = self.quiescence_depth
         self.engine.use_mobility = self.use_mobility
         self.engine.time_check_interval = self.time_check_interval
+        self.engine.policy_scorer = self.policy_scorer
+        self.engine.policy_ordering_mode = self.neural_ordering_mode
+        self.engine.policy_ordering_min_depth = self.neural_min_depth
         start = time.perf_counter()
         if self.movetime_ms is None:
             result = self.engine.search(board, self.depth)
@@ -341,19 +356,28 @@ def build_player(
     use_mobility: bool = True,
     quiescence_depth: int = 6,
     time_check_interval: int = 1024,
+    neural_checkpoint: Path | None = None,
+    neural_channels: int = 32,
+    neural_ordering_mode: str = "root",
+    neural_min_depth: int = 2,
 ) -> Player:
     if kind == "random":
         return RandomPlayer()
     if kind == "search":
         suffix = f"-{movetime_ms}ms" if movetime_ms is not None else ""
         mobility_suffix = "" if use_mobility else "-no-mobility"
+        neural_suffix = "-neural-order" if neural_checkpoint is not None else ""
         return SearchPlayer(
-            f"search-depth-{depth}{suffix}{mobility_suffix}",
+            f"search-depth-{depth}{suffix}{mobility_suffix}{neural_suffix}",
             depth,
             movetime_ms,
             use_mobility,
             quiescence_depth,
             time_check_interval,
+            neural_checkpoint,
+            neural_channels,
+            neural_ordering_mode,
+            neural_min_depth,
         )
     raise ValueError(f"unknown player kind: {kind}")
 
@@ -369,6 +393,11 @@ def main() -> None:
     parser.add_argument("--movetime", type=int, help="Apply the same per-move time limit to both search players.")
     parser.add_argument("--qdepth", type=int, default=6)
     parser.add_argument("--time-check-interval", type=int, default=1024)
+    parser.add_argument("--a-neural-checkpoint", type=Path)
+    parser.add_argument("--b-neural-checkpoint", type=Path)
+    parser.add_argument("--neural-channels", type=int, default=32)
+    parser.add_argument("--neural-ordering", choices=["root", "depth", "all"], default="root")
+    parser.add_argument("--neural-min-depth", type=int, default=2)
     parser.add_argument("--no-mobility", action="store_true")
     parser.add_argument("--games", type=int, default=2)
     parser.add_argument("--max-plies", type=int, default=200)
@@ -385,6 +414,10 @@ def main() -> None:
         not args.no_mobility,
         max(0, args.qdepth),
         max(1, args.time_check_interval),
+        args.a_neural_checkpoint,
+        max(1, args.neural_channels),
+        args.neural_ordering,
+        max(1, args.neural_min_depth),
     )
     player_b = build_player(
         args.b,
@@ -393,6 +426,10 @@ def main() -> None:
         not args.no_mobility,
         max(0, args.qdepth),
         max(1, args.time_check_interval),
+        args.b_neural_checkpoint,
+        max(1, args.neural_channels),
+        args.neural_ordering,
+        max(1, args.neural_min_depth),
     )
     result = play_match(
         player_a,

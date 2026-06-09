@@ -87,15 +87,23 @@ def benchmark_depth(
     use_mobility: bool = True,
     quiescence_depth: int = 6,
     time_check_interval: int = 1024,
+    neural_checkpoint: Path | None = None,
+    neural_channels: int = 32,
+    neural_ordering_mode: str = "root",
+    neural_min_depth: int = 2,
 ) -> list[BenchmarkRow]:
     max_games = max(game_counts)
     player_a = SearchPlayer(
-        search_player_name(depth, movetime_ms, use_mobility),
+        search_player_name(depth, movetime_ms, use_mobility, neural_checkpoint is not None),
         depth,
         movetime_ms,
         use_mobility,
         quiescence_depth,
         time_check_interval,
+        neural_checkpoint,
+        neural_channels,
+        neural_ordering_mode,
+        neural_min_depth,
     )
     player_b = opponent or RandomPlayer()
     start = time.perf_counter()
@@ -124,16 +132,24 @@ def benchmark_depth_streaming(
     use_mobility: bool = True,
     quiescence_depth: int = 6,
     time_check_interval: int = 1024,
+    neural_checkpoint: Path | None = None,
+    neural_channels: int = 32,
+    neural_ordering_mode: str = "root",
+    neural_min_depth: int = 2,
 ) -> list[BenchmarkRow]:
     checkpoints = sorted(set(game_counts))
     max_games = max(checkpoints)
     player_a = SearchPlayer(
-        search_player_name(depth, movetime_ms, use_mobility),
+        search_player_name(depth, movetime_ms, use_mobility, neural_checkpoint is not None),
         depth,
         movetime_ms,
         use_mobility,
         quiescence_depth,
         time_check_interval,
+        neural_checkpoint,
+        neural_channels,
+        neural_ordering_mode,
+        neural_min_depth,
     )
     player_b = opponent or RandomPlayer()
     games = []
@@ -206,6 +222,10 @@ def run_benchmark(
     use_mobility: bool = True,
     quiescence_depth: int = 6,
     time_check_interval: int = 1024,
+    neural_checkpoint: Path | None = None,
+    neural_channels: int = 32,
+    neural_ordering_mode: str = "root",
+    neural_min_depth: int = 2,
 ) -> list[BenchmarkRow]:
     rows = []
     for depth in depths:
@@ -221,6 +241,10 @@ def run_benchmark(
                     use_mobility,
                     quiescence_depth,
                     time_check_interval,
+                    neural_checkpoint,
+                    neural_channels,
+                    neural_ordering_mode,
+                    neural_min_depth,
                 )
             )
         else:
@@ -235,6 +259,10 @@ def run_benchmark(
                     use_mobility,
                     quiescence_depth,
                     time_check_interval,
+                    neural_checkpoint,
+                    neural_channels,
+                    neural_ordering_mode,
+                    neural_min_depth,
                 )
             )
     return rows
@@ -287,6 +315,10 @@ def run_benchmark_streaming(
     quiescence_depth: int = 6,
     time_check_interval: int = 1024,
     csv_path: Path | None = None,
+    neural_checkpoint: Path | None = None,
+    neural_channels: int = 32,
+    neural_ordering_mode: str = "root",
+    neural_min_depth: int = 2,
 ) -> list[BenchmarkRow]:
     rows = []
     for depth in depths:
@@ -300,6 +332,10 @@ def run_benchmark_streaming(
             use_mobility,
             quiescence_depth,
             time_check_interval,
+            neural_checkpoint,
+            neural_channels,
+            neural_ordering_mode,
+            neural_min_depth,
         ):
             rows.append(row)
             if csv_path is not None:
@@ -317,10 +353,16 @@ def parse_int_list(values: list[str]) -> list[int]:
     return result
 
 
-def search_player_name(depth: int, movetime_ms: int | None = None, use_mobility: bool = True) -> str:
+def search_player_name(
+    depth: int,
+    movetime_ms: int | None = None,
+    use_mobility: bool = True,
+    neural_ordering: bool = False,
+) -> str:
     suffix = f"-{movetime_ms}ms" if movetime_ms is not None else ""
     mobility_suffix = "" if use_mobility else "-no-mobility"
-    return f"search-depth-{depth}{suffix}{mobility_suffix}"
+    neural_suffix = "-neural-order" if neural_ordering else ""
+    return f"search-depth-{depth}{suffix}{mobility_suffix}{neural_suffix}"
 
 
 def main() -> None:
@@ -342,6 +384,11 @@ def main() -> None:
     parser.add_argument("--qdepth", type=int, default=6)
     parser.add_argument("--opponent-qdepth", type=int, default=6)
     parser.add_argument("--time-check-interval", type=int, default=1024)
+    parser.add_argument("--neural-checkpoint", type=Path)
+    parser.add_argument("--opponent-neural-checkpoint", type=Path)
+    parser.add_argument("--neural-channels", type=int, default=32)
+    parser.add_argument("--neural-ordering", choices=["root", "depth", "all"], default="root")
+    parser.add_argument("--neural-min-depth", type=int, default=2)
     parser.add_argument("--opening-plies", type=int, default=0)
     parser.add_argument("--csv", type=Path)
     parser.add_argument("--stream", action="store_true", help="Print and save each checkpoint as it completes.")
@@ -357,6 +404,10 @@ def main() -> None:
         not args.opponent_no_mobility,
         max(0, args.opponent_qdepth),
         max(1, args.time_check_interval),
+        args.opponent_neural_checkpoint,
+        max(1, args.neural_channels),
+        args.neural_ordering,
+        max(1, args.neural_min_depth),
     )
     if args.stream:
         print(format_rows([]).splitlines()[0])
@@ -372,6 +423,10 @@ def main() -> None:
             max(0, args.qdepth),
             max(1, args.time_check_interval),
             args.csv,
+            args.neural_checkpoint,
+            max(1, args.neural_channels),
+            args.neural_ordering,
+            max(1, args.neural_min_depth),
         )
     else:
         rows = run_benchmark(
@@ -384,6 +439,10 @@ def main() -> None:
             use_mobility=use_mobility,
             quiescence_depth=max(0, args.qdepth),
             time_check_interval=max(1, args.time_check_interval),
+            neural_checkpoint=args.neural_checkpoint,
+            neural_channels=max(1, args.neural_channels),
+            neural_ordering_mode=args.neural_ordering,
+            neural_min_depth=max(1, args.neural_min_depth),
         )
         if args.csv is not None:
             save_rows_csv(rows, args.csv)

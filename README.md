@@ -13,17 +13,19 @@ alpha-beta search, supervised policy/value training, and eventually PUCT MCTS.
 3. Random legal move baseline.
 4. Negamax with alpha-beta pruning. 
 5. Perft tests for move-generation confidence.
-6. AlphaZero-style 4672 move encoding. 
-7. Quiescence search. 
-8. Transposition table, iterative deepening, and time controls. 
-9. Search pruning and move ordering heuristics. 
-10. Richer handcrafted evaluation. 
-11. Engine-vs-engine match runner and PGN export. 
-12. Lichess PGN downloader and parser. 
-13. PyTorch policy/value network.
-14. Neural-guided move selection.
-15. PUCT MCTS.
-16. Self-play training loop.
+6. AlphaZero-style 4672 move encoding. Done.
+7. Quiescence search. Done.
+8. Transposition table, iterative deepening, and time controls. Done.
+9. Search pruning and move ordering heuristics. Done.
+10. Richer handcrafted evaluation. Done.
+11. Engine-vs-engine match runner and PGN export. Done.
+12. Lichess PGN downloader and parser. Done.
+13. PyTorch policy/value network. Done.
+14. Neural policy move ordering for alpha-beta search. Done.
+15. Neural-only move selection.
+16. Value network inside search.
+17. PUCT MCTS.
+18. Self-play training loop.
 
 ## Setup
 
@@ -37,6 +39,12 @@ pip install -r requirements.txt
 
 ```powershell
 python -m chess_engine_2.uci
+```
+
+To run the UCI engine with neural root move ordering:
+
+```powershell
+python -m chess_engine_2.uci --neural-checkpoint models/policy_value_phase7.pt --neural-ordering root
 ```
 
 Try these commands:
@@ -55,8 +63,8 @@ The current engine uses material, piece-square tables, pawn structure, rook file
 activity, mobility, king safety, tapered king evaluation, negamax alpha-beta,
 quiescence search, transposition tables, iterative deepening, UCI time controls,
 null move pruning, late move reductions, futility pruning, killer moves, history
-heuristics, and principal-variation output. If no depth or time control is
-supplied, it searches to depth 4.
+heuristics, principal-variation output, and optional neural policy move ordering.
+If no depth or time control is supplied, it searches to depth 4.
 
 ## Tests
 
@@ -101,6 +109,18 @@ Inspect the trained policy on a position:
 
 ```powershell
 python -m chess_engine_2.predict --checkpoint models/policy_value_phase7.pt --top 5
+```
+
+Use the trained policy network only for alpha-beta move ordering:
+
+```powershell
+python -m chess_engine_2.benchmark --depths 2 --games-list 2 --opponent search --opponent-depth 2 --max-plies 40 --neural-checkpoint models/policy_value_phase7.pt
+```
+
+The default neural ordering mode is root-only. You can also test deeper modes:
+
+```powershell
+python -m chess_engine_2.benchmark --depths 2 --games-list 2 --opponent search --opponent-depth 2 --max-plies 40 --neural-checkpoint models/policy_value_phase7.pt --neural-ordering all
 ```
 
 ## Match Testing

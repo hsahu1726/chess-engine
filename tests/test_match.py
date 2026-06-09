@@ -66,6 +66,25 @@ def test_timed_search_player_returns_legal_move() -> None:
     assert move in board.legal_moves
 
 
+def test_search_player_accepts_policy_scorer() -> None:
+    class FakePolicyScorer:
+        calls = 0
+
+        def score_moves(self, board: chess.Board):
+            self.calls += 1
+            return {chess.Move.from_uci("a2a3"): 100.0}
+
+    scorer = FakePolicyScorer()
+    player = SearchPlayer("search-policy", depth=1)
+    player.policy_scorer = scorer
+    player.reset_for_new_game()
+    board = chess.Board()
+    move = player.choose_move(board)
+
+    assert move in board.legal_moves
+    assert scorer.calls > 0
+
+
 def test_save_match_pgn_writes_games(tmp_path) -> None:
     result = play_match(RandomPlayer("a"), RandomPlayer("b"), games=1, max_plies=1)
     path = tmp_path / "match.pgn"

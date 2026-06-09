@@ -8,6 +8,7 @@ from chess_engine_2.encoding import POLICY_SIZE, move_to_policy_index
 from chess_engine_2.neural import (
     ChessJsonlDataset,
     MovePrediction,
+    NeuralPolicyScorer,
     PolicyValueNet,
     load_checkpoint,
     predict_legal_moves,
@@ -96,3 +97,11 @@ def test_predict_legal_moves_returns_ranked_legal_moves() -> None:
     assert all(isinstance(prediction, MovePrediction) for prediction in predictions)
     assert all(chess.Move.from_uci(prediction.move_uci) in board.legal_moves for prediction in predictions)
     assert predictions[0].score >= predictions[-1].score
+
+
+def test_neural_policy_scorer_scores_legal_moves() -> None:
+    scorer = NeuralPolicyScorer(PolicyValueNet(channels=8), torch.device("cpu"))
+    board = chess.Board()
+    scores = scorer.score_moves(board)
+
+    assert set(scores) == set(board.legal_moves)

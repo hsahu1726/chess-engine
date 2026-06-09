@@ -29,6 +29,35 @@ class MovePrediction:
     score: float
 
 
+class NeuralPolicyScorer:
+    def __init__(self, model: PolicyValueNet, device: torch.device):
+        self.model = model
+        self.device = device
+
+    @classmethod
+    def from_checkpoint(
+        cls,
+        checkpoint: Path,
+        channels: int = 32,
+        device: torch.device | None = None,
+    ) -> "NeuralPolicyScorer":
+        resolved_device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = PolicyValueNet(channels=channels).to(resolved_device)
+        load_checkpoint(checkpoint, model, resolved_device)
+        return cls(model, resolved_device)
+
+    def score_moves(self, board: chess.Board) -> dict[chess.Move, float]:
+        self.model.eval()
+        planes = torch.tensor(board_to_planes(board), dtype=torch.float32, device=self.device).unsqueeze(0)
+        scores = {}
+        with torch.no_grad():
+            policy_logits, _ = self.model(planes)
+            for move in board.legal_moves:
+                policy_index = move_to_policy_index(move, board)
+                scores[move] = float(policy_logits[0, policy_index].item())
+        return scores
+
+
 class ChessJsonlDataset(Dataset):
     def __init__(self, path: Path, max_samples: int | None = None):
         self.samples = []

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import argparse
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TextIO
 
 import chess
@@ -173,8 +175,39 @@ def parse_go_int(args: str, keyword: str) -> int | None:
         return None
 
 
+def build_engine(
+    neural_checkpoint: Path | None = None,
+    neural_channels: int = 32,
+    neural_ordering: str = "root",
+    neural_min_depth: int = 2,
+) -> SearchEngine:
+    engine = SearchEngine(
+        policy_ordering_mode=neural_ordering,
+        policy_ordering_min_depth=max(1, neural_min_depth),
+    )
+    if neural_checkpoint is not None:
+        from chess_engine_2.neural import NeuralPolicyScorer
+
+        engine.policy_scorer = NeuralPolicyScorer.from_checkpoint(neural_checkpoint, max(1, neural_channels))
+    return engine
+
+
 def main() -> None:
-    UciSession().run()
+    parser = argparse.ArgumentParser(description="Run Chess Engine 2 as a UCI engine.")
+    parser.add_argument("--neural-checkpoint", type=Path)
+    parser.add_argument("--neural-channels", type=int, default=32)
+    parser.add_argument("--neural-ordering", choices=["root", "depth", "all"], default="root")
+    parser.add_argument("--neural-min-depth", type=int, default=2)
+    args = parser.parse_args()
+
+    UciSession(
+        engine=build_engine(
+            args.neural_checkpoint,
+            args.neural_channels,
+            args.neural_ordering,
+            args.neural_min_depth,
+        )
+    ).run()
 
 
 if __name__ == "__main__":
