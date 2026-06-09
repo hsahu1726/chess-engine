@@ -1,6 +1,6 @@
-# Chess Engine 2
+# Chess Engine 
 
-Python prototype for an Lc0-inspired chess engine path.
+Python prototype for an chess engine path.
 
 The first milestone is intentionally modest: a legal UCI engine that can be loaded
 by chess GUIs and tested reliably. From there, the project can grow through
@@ -11,15 +11,15 @@ alpha-beta search, supervised policy/value training, and eventually PUCT MCTS.
 1. Legal move engine using `python-chess`.
 2. UCI protocol loop.
 3. Random legal move baseline.
-4. Negamax with alpha-beta pruning. Done.
+4. Negamax with alpha-beta pruning. 
 5. Perft tests for move-generation confidence.
-6. AlphaZero-style 4672 move encoding. Done.
-7. Quiescence search. Done.
-8. Transposition table, iterative deepening, and time controls. Done.
-9. Search pruning and move ordering heuristics. Done.
-10. Richer handcrafted evaluation. Done.
-11. Engine-vs-engine match runner and PGN export. Done.
-12. Lichess PGN downloader and parser. Done.
+6. AlphaZero-style 4672 move encoding. 
+7. Quiescence search. 
+8. Transposition table, iterative deepening, and time controls. 
+9. Search pruning and move ordering heuristics. 
+10. Richer handcrafted evaluation. 
+11. Engine-vs-engine match runner and PGN export. 
+12. Lichess PGN downloader and parser. 
 13. PyTorch policy/value network.
 14. Neural-guided move selection.
 15. PUCT MCTS.
