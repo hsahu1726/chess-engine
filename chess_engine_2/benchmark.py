@@ -6,7 +6,16 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from chess_engine_2.match import MatchResult, Player, RandomPlayer, SearchPlayer, build_player, play_game, play_match
+from chess_engine_2.match import (
+    AdjudicationConfig,
+    MatchResult,
+    Player,
+    RandomPlayer,
+    SearchPlayer,
+    build_player,
+    play_game,
+    play_match,
+)
 
 
 DEFAULT_GAME_COUNTS = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
@@ -27,6 +36,8 @@ CSV_FIELDNAMES = [
     "a_nps",
     "a_average_evaluations",
     "a_average_mobility_evaluations",
+    "a_average_neural_value_evaluations",
+    "a_average_neural_value_cache_hits",
     "b_average_depth",
     "b_average_nodes",
     "b_average_main_nodes",
@@ -34,6 +45,8 @@ CSV_FIELDNAMES = [
     "b_nps",
     "b_average_evaluations",
     "b_average_mobility_evaluations",
+    "b_average_neural_value_evaluations",
+    "b_average_neural_value_cache_hits",
 ]
 
 
@@ -55,6 +68,8 @@ class BenchmarkRow:
     a_nps: float = 0.0
     a_average_evaluations: float = 0.0
     a_average_mobility_evaluations: float = 0.0
+    a_average_neural_value_evaluations: float = 0.0
+    a_average_neural_value_cache_hits: float = 0.0
     b_average_depth: float = 0.0
     b_average_nodes: float = 0.0
     b_average_main_nodes: float = 0.0
@@ -62,6 +77,8 @@ class BenchmarkRow:
     b_nps: float = 0.0
     b_average_evaluations: float = 0.0
     b_average_mobility_evaluations: float = 0.0
+    b_average_neural_value_evaluations: float = 0.0
+    b_average_neural_value_cache_hits: float = 0.0
 
     def format(self) -> str:
         return (
@@ -71,9 +88,11 @@ class BenchmarkRow:
             f"{self.a_average_depth:>5.2f} | {self.a_average_nodes:>8.0f} | {self.a_nps:>7.0f} | "
             f"{self.a_average_main_nodes:>6.0f} | {self.a_average_quiescence_nodes:>5.0f} | "
             f"{self.a_average_evaluations:>7.0f} | {self.a_average_mobility_evaluations:>6.0f} | "
+            f"{self.a_average_neural_value_evaluations:>6.0f} | {self.a_average_neural_value_cache_hits:>6.0f} | "
             f"{self.b_average_depth:>5.2f} | {self.b_average_nodes:>8.0f} | {self.b_nps:>7.0f} | "
             f"{self.b_average_main_nodes:>6.0f} | {self.b_average_quiescence_nodes:>5.0f} | "
-            f"{self.b_average_evaluations:>7.0f} | {self.b_average_mobility_evaluations:>6.0f}"
+            f"{self.b_average_evaluations:>7.0f} | {self.b_average_mobility_evaluations:>6.0f} | "
+            f"{self.b_average_neural_value_evaluations:>6.0f} | {self.b_average_neural_value_cache_hits:>6.0f}"
         )
 
 
@@ -91,6 +110,11 @@ def benchmark_depth(
     neural_channels: int = 32,
     neural_ordering_mode: str = "root",
     neural_min_depth: int = 2,
+    value_checkpoint: Path | None = None,
+    evaluation_mode: str = "classical",
+    neural_value_weight: float = 0.2,
+    neural_value_scale: int = 1000,
+    adjudication: AdjudicationConfig | None = None,
 ) -> list[BenchmarkRow]:
     max_games = max(game_counts)
     player_a = SearchPlayer(
@@ -104,6 +128,10 @@ def benchmark_depth(
         neural_channels,
         neural_ordering_mode,
         neural_min_depth,
+        value_checkpoint,
+        evaluation_mode,
+        neural_value_weight,
+        neural_value_scale,
     )
     player_b = opponent or RandomPlayer()
     start = time.perf_counter()
@@ -114,6 +142,7 @@ def benchmark_depth(
         max_plies=max_plies,
         record_pgn=False,
         opening_plies=opening_plies,
+        adjudication=adjudication,
     )
     elapsed = time.perf_counter() - start
     return [
@@ -136,6 +165,11 @@ def benchmark_depth_streaming(
     neural_channels: int = 32,
     neural_ordering_mode: str = "root",
     neural_min_depth: int = 2,
+    value_checkpoint: Path | None = None,
+    evaluation_mode: str = "classical",
+    neural_value_weight: float = 0.2,
+    neural_value_scale: int = 1000,
+    adjudication: AdjudicationConfig | None = None,
 ) -> list[BenchmarkRow]:
     checkpoints = sorted(set(game_counts))
     max_games = max(checkpoints)
@@ -150,6 +184,10 @@ def benchmark_depth_streaming(
         neural_channels,
         neural_ordering_mode,
         neural_min_depth,
+        value_checkpoint,
+        evaluation_mode,
+        neural_value_weight,
+        neural_value_scale,
     )
     player_b = opponent or RandomPlayer()
     games = []
@@ -161,7 +199,16 @@ def benchmark_depth_streaming(
             white, black = player_a, player_b
         else:
             white, black = player_b, player_a
-        games.append(play_game(white, black, max_plies, record_pgn=False, opening_plies=opening_plies))
+        games.append(
+            play_game(
+                white,
+                black,
+                max_plies,
+                record_pgn=False,
+                opening_plies=opening_plies,
+                adjudication=adjudication,
+            )
+        )
 
         completed_games = game_index + 1
         if completed_games in checkpoints:
@@ -201,6 +248,8 @@ def row_from_prefix(depth: int, match: MatchResult, elapsed_seconds: float) -> B
         a_nps=match.player_a_stats.nodes_per_second,
         a_average_evaluations=match.player_a_stats.average_evaluations,
         a_average_mobility_evaluations=match.player_a_stats.average_mobility_evaluations,
+        a_average_neural_value_evaluations=match.player_a_stats.average_neural_value_evaluations,
+        a_average_neural_value_cache_hits=match.player_a_stats.average_neural_value_cache_hits,
         b_average_depth=match.player_b_stats.average_depth,
         b_average_nodes=match.player_b_stats.average_nodes,
         b_average_main_nodes=match.player_b_stats.average_main_nodes,
@@ -208,6 +257,8 @@ def row_from_prefix(depth: int, match: MatchResult, elapsed_seconds: float) -> B
         b_nps=match.player_b_stats.nodes_per_second,
         b_average_evaluations=match.player_b_stats.average_evaluations,
         b_average_mobility_evaluations=match.player_b_stats.average_mobility_evaluations,
+        b_average_neural_value_evaluations=match.player_b_stats.average_neural_value_evaluations,
+        b_average_neural_value_cache_hits=match.player_b_stats.average_neural_value_cache_hits,
     )
 
 
@@ -226,6 +277,11 @@ def run_benchmark(
     neural_channels: int = 32,
     neural_ordering_mode: str = "root",
     neural_min_depth: int = 2,
+    value_checkpoint: Path | None = None,
+    evaluation_mode: str = "classical",
+    neural_value_weight: float = 0.2,
+    neural_value_scale: int = 1000,
+    adjudication: AdjudicationConfig | None = None,
 ) -> list[BenchmarkRow]:
     rows = []
     for depth in depths:
@@ -245,6 +301,11 @@ def run_benchmark(
                     neural_channels,
                     neural_ordering_mode,
                     neural_min_depth,
+                    value_checkpoint,
+                    evaluation_mode,
+                    neural_value_weight,
+                    neural_value_scale,
+                    adjudication,
                 )
             )
         else:
@@ -263,6 +324,11 @@ def run_benchmark(
                     neural_channels,
                     neural_ordering_mode,
                     neural_min_depth,
+                    value_checkpoint,
+                    evaluation_mode,
+                    neural_value_weight,
+                    neural_value_scale,
+                    adjudication,
                 )
             )
     return rows
@@ -272,12 +338,12 @@ def format_rows(rows: list[BenchmarkRow]) -> str:
     header = (
         "depth | games | wins | losses | draws |  score | score% | avg plies | elapsed | "
         "a dep |  a nodes |   a nps | a main |   a q | a eval | a mob | "
-        "b dep |  b nodes |   b nps | b main |   b q | b eval | b mob"
+        "a nval | a vhit | b dep |  b nodes |   b nps | b main |   b q | b eval | b mob | b nval | b vhit"
     )
     divider = (
         "------|-------|------|--------|-------|--------|--------|-----------|---------|"
         "-------|----------|---------|--------|-------|--------|-------|"
-        "-------|----------|---------|--------|-------|--------|------"
+        "--------|--------|-------|----------|---------|--------|-------|--------|-------|--------|------"
     )
     return "\n".join([header, divider, *(row.format() for row in rows)])
 
@@ -319,6 +385,11 @@ def run_benchmark_streaming(
     neural_channels: int = 32,
     neural_ordering_mode: str = "root",
     neural_min_depth: int = 2,
+    value_checkpoint: Path | None = None,
+    evaluation_mode: str = "classical",
+    neural_value_weight: float = 0.2,
+    neural_value_scale: int = 1000,
+    adjudication: AdjudicationConfig | None = None,
 ) -> list[BenchmarkRow]:
     rows = []
     for depth in depths:
@@ -336,6 +407,11 @@ def run_benchmark_streaming(
             neural_channels,
             neural_ordering_mode,
             neural_min_depth,
+            value_checkpoint,
+            evaluation_mode,
+            neural_value_weight,
+            neural_value_scale,
+            adjudication,
         ):
             rows.append(row)
             if csv_path is not None:
@@ -389,7 +465,18 @@ def main() -> None:
     parser.add_argument("--neural-channels", type=int, default=32)
     parser.add_argument("--neural-ordering", choices=["root", "depth", "all"], default="root")
     parser.add_argument("--neural-min-depth", type=int, default=2)
+    parser.add_argument("--value-checkpoint", type=Path)
+    parser.add_argument("--opponent-value-checkpoint", type=Path)
+    parser.add_argument("--evaluation-mode", choices=["classical", "neural", "blend"], default="classical")
+    parser.add_argument("--neural-value-weight", type=float, default=0.2)
+    parser.add_argument("--neural-value-scale", type=int, default=1000)
     parser.add_argument("--opening-plies", type=int, default=0)
+    parser.add_argument("--adjudicate", action="store_true")
+    parser.add_argument("--adjudicate-eval", type=int, default=500)
+    parser.add_argument("--adjudicate-eval-plies", type=int, default=8)
+    parser.add_argument("--adjudicate-material", type=int, default=900)
+    parser.add_argument("--adjudicate-material-plies", type=int, default=8)
+    parser.add_argument("--adjudicate-min-plies", type=int, default=20)
     parser.add_argument("--csv", type=Path)
     parser.add_argument("--stream", action="store_true", help="Print and save each checkpoint as it completes.")
     args = parser.parse_args()
@@ -408,6 +495,18 @@ def main() -> None:
         max(1, args.neural_channels),
         args.neural_ordering,
         max(1, args.neural_min_depth),
+        args.opponent_value_checkpoint,
+        args.evaluation_mode,
+        args.neural_value_weight,
+        max(1, args.neural_value_scale),
+    )
+    adjudication = AdjudicationConfig(
+        enabled=args.adjudicate,
+        eval_threshold=max(1, args.adjudicate_eval),
+        eval_plies=max(1, args.adjudicate_eval_plies),
+        material_threshold=max(1, args.adjudicate_material),
+        material_plies=max(1, args.adjudicate_material_plies),
+        min_plies=max(0, args.adjudicate_min_plies),
     )
     if args.stream:
         print(format_rows([]).splitlines()[0])
@@ -427,6 +526,11 @@ def main() -> None:
             max(1, args.neural_channels),
             args.neural_ordering,
             max(1, args.neural_min_depth),
+            args.value_checkpoint,
+            args.evaluation_mode,
+            args.neural_value_weight,
+            max(1, args.neural_value_scale),
+            adjudication,
         )
     else:
         rows = run_benchmark(
@@ -443,6 +547,11 @@ def main() -> None:
             neural_channels=max(1, args.neural_channels),
             neural_ordering_mode=args.neural_ordering,
             neural_min_depth=max(1, args.neural_min_depth),
+            value_checkpoint=args.value_checkpoint,
+            evaluation_mode=args.evaluation_mode,
+            neural_value_weight=args.neural_value_weight,
+            neural_value_scale=max(1, args.neural_value_scale),
+            adjudication=adjudication,
         )
         if args.csv is not None:
             save_rows_csv(rows, args.csv)
