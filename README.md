@@ -24,9 +24,10 @@ alpha-beta search, supervised policy/value training, and eventually PUCT MCTS.
 14. Neural policy move ordering for alpha-beta search. Done.
 15. Neural-only move selection. Done.
 16. Larger 1,000-game neural training run. Done.
-17. Value network inside search.
-18. PUCT MCTS.
-19. Self-play training loop.
+17. Value network inside search. Done.
+18. GPU 10,000-game training with validation and tensor caching. Done.
+19. PUCT MCTS.
+20. Self-play training loop.
 
 ## Setup
 
@@ -114,6 +115,26 @@ python -m chess_engine_2.data.dataset data/processed/lichess_2013-02_1000.jsonl
 python -m chess_engine_2.train data/processed/lichess_2013-02_1000.jsonl --epochs 3 --batch-size 256 --channels 32 --checkpoint models/policy_value_phase10_1000.pt
 ```
 
+Train with validation metrics and checkpoint metadata:
+
+```powershell
+python -m chess_engine_2.train data/processed/lichess_2013-02_1000.jsonl --epochs 3 --batch-size 256 --channels 32 --checkpoint models/policy_value_phase10_1000_validated.pt --validation-split 0.1
+```
+
+Check CUDA before larger training:
+
+```powershell
+python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0))"
+```
+
+Train a 10,000-game checkpoint with a reusable tensor cache:
+
+```powershell
+python -m chess_engine_2.data.pgn data/raw/lichess_db_standard_rated_2013-02.pgn.zst --max-games 10000 --output data/processed/lichess_2013-02_10000.jsonl
+python -m chess_engine_2.data.dataset data/processed/lichess_2013-02_10000.jsonl
+python -m chess_engine_2.train data/processed/lichess_2013-02_10000.jsonl --epochs 3 --batch-size 256 --channels 32 --checkpoint models/policy_value_phase12_10000.pt --validation-split 0.1 --num-workers 2 --tensor-cache data/processed/lichess_2013-02_10000_tensors.pt
+```
+
 Inspect the trained policy on a position:
 
 ```powershell
@@ -138,14 +159,46 @@ Run a neural-policy-only player with no search:
 python -m chess_engine_2.match --a neural --a-neural-checkpoint models/policy_value_phase7.pt --b random --games 4 --max-plies 80
 ```
 
+Experiment with the value head inside search:
+
+```powershell
+python -m chess_engine_2.match --a search --a-depth 1 --a-value-checkpoint models/policy_value_phase10_1000_validated.pt --evaluation-mode blend --neural-value-weight 0.2 --b search --b-depth 1 --games 2 --max-plies 20 --qdepth 0
+```
+
+Compare classical, neural-only, and blended evaluation:
+
+```powershell
+python -m chess_engine_2.benchmark --depths 1 --games-list 4 --opponent search --opponent-depth 1 --max-plies 24 --qdepth 0 --opponent-qdepth 0
+python -m chess_engine_2.benchmark --depths 1 --games-list 4 --opponent search --opponent-depth 1 --max-plies 24 --qdepth 0 --opponent-qdepth 0 --value-checkpoint models/policy_value_phase10_1000_validated.pt --evaluation-mode neural
+python -m chess_engine_2.benchmark --depths 1 --games-list 4 --opponent search --opponent-depth 1 --max-plies 24 --qdepth 0 --opponent-qdepth 0 --value-checkpoint models/policy_value_phase10_1000_validated.pt --evaluation-mode blend --neural-value-weight 0.2
+```
+
 ## Match Testing
 
 ```powershell
 python -m chess_engine_2.match --a search --a-depth 2 --b random --games 4 --max-plies 200 --pgn match.pgn
 ```
 
+Use Match Runner 2.0 adjudication to reduce artificial move-limit draws:
+
+```powershell
+python -m chess_engine_2.match --a search --a-depth 2 --b search --b-depth 1 --games 4 --max-plies 200 --adjudicate --adjudicate-eval 500 --adjudicate-eval-plies 8 --adjudicate-material 900 --adjudicate-material-plies 8 --adjudicate-min-plies 40
+```
+
 ```powershell
 python -m chess_engine_2.benchmark --depths 3 --opponent search --opponent-depth 2 --movetime 500 --opponent-movetime 500 --games-list 5,10 --opening-plies 4 --stream --csv benchmark.csv
+```
+
+Benchmark with adjudication:
+
+```powershell
+python -m chess_engine_2.benchmark --depths 2 --games-list 10 --opponent search --opponent-depth 1 --max-plies 200 --adjudicate --adjudicate-eval 500 --adjudicate-eval-plies 8 --adjudicate-material 900 --adjudicate-material-plies 8 --adjudicate-min-plies 40
+```
+
+Benchmark neural ordering against classical ordering:
+
+```powershell
+python -m chess_engine_2.benchmark --depths 2 --games-list 10 20 30 40 50 60 70 80 90 100 --opponent search --opponent-depth 2 --max-plies 200 --qdepth 2 --opponent-qdepth 2 --opening-plies 4 --adjudicate --adjudicate-eval 500 --adjudicate-eval-plies 8 --adjudicate-material 900 --adjudicate-material-plies 8 --adjudicate-min-plies 40 --neural-checkpoint models/policy_value_phase12_10000.pt --neural-channels 32 --neural-ordering root --stream --csv benchmark_phase12_neural_order_vs_classical_100.csv
 ```
 
 ```powershell
