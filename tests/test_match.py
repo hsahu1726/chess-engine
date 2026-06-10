@@ -5,6 +5,7 @@ from chess_engine_2.match import (
     AdjudicationState,
     GameResult,
     NeuralPolicyPlayer,
+    MCTSPlayer,
     RandomPlayer,
     SearchPlayer,
     adjudicate_game,
@@ -147,9 +148,38 @@ def test_neural_policy_player_chooses_highest_scored_legal_move() -> None:
     assert player.choose_move(chess.Board()) == chess.Move.from_uci("e2e4")
 
 
+def test_mcts_player_returns_legal_move_with_fake_policy_value() -> None:
+    def policy_value(board: chess.Board):
+        moves = list(board.legal_moves)
+        return {move: 1.0 / len(moves) for move in moves}, 0.0
+
+    player = MCTSPlayer.__new__(MCTSPlayer)
+    player.name = "mcts-test"
+    player.checkpoint = None
+    player.channels = 32
+    player.simulations = 4
+    player.cpuct = 1.5
+    player.stats = RandomPlayer().stats
+    player.policy_value = policy_value
+
+    move = player.choose_move(chess.Board())
+
+    assert move in chess.Board().legal_moves
+    assert player.stats.total_nodes == 4
+
+
 def test_build_player_rejects_neural_without_checkpoint() -> None:
     try:
         build_player("neural", depth=1)
+    except ValueError as exc:
+        assert "checkpoint" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_build_player_rejects_mcts_without_checkpoint() -> None:
+    try:
+        build_player("mcts", depth=1)
     except ValueError as exc:
         assert "checkpoint" in str(exc)
     else:

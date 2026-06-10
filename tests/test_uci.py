@@ -83,6 +83,25 @@ def test_go_clock_returns_bestmove() -> None:
     assert "bestmove 0000" not in output
 
 
+def test_go_mcts_returns_bestmove() -> None:
+    def policy_value(board: chess.Board):
+        moves = list(board.legal_moves)
+        return {move: 1.0 / len(moves) for move in moves}, 0.0
+
+    output = StringIO()
+    UciSession(
+        input_stream=StringIO("position startpos\ngo\nquit\n"),
+        output_stream=output,
+        mcts_policy_value=policy_value,
+        mcts_simulations=4,
+    ).run()
+
+    text = output.getvalue()
+    assert "info string mcts simulations 4" in text
+    assert "bestmove " in text
+    assert "bestmove 0000" not in text
+
+
 def test_build_engine_configures_neural_ordering_without_checkpoint() -> None:
     engine = build_engine(neural_ordering="depth", neural_min_depth=3)
 

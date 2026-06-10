@@ -451,7 +451,7 @@ def main() -> None:
         help="Cumulative game checkpoints.",
     )
     parser.add_argument("--max-plies", type=int, default=200)
-    parser.add_argument("--opponent", choices=["search", "random", "neural"], default="random")
+    parser.add_argument("--opponent", choices=["search", "random", "neural", "mcts"], default="random")
     parser.add_argument("--opponent-depth", type=int, default=1)
     parser.add_argument("--movetime", type=int, help="Per-move time limit for benchmarked search player.")
     parser.add_argument("--opponent-movetime", type=int, help="Per-move time limit for search opponent.")
@@ -470,6 +470,8 @@ def main() -> None:
     parser.add_argument("--evaluation-mode", choices=["classical", "neural", "blend"], default="classical")
     parser.add_argument("--neural-value-weight", type=float, default=0.2)
     parser.add_argument("--neural-value-scale", type=int, default=1000)
+    parser.add_argument("--mcts-simulations", type=int, default=100)
+    parser.add_argument("--mcts-cpuct", type=float, default=1.5)
     parser.add_argument("--opening-plies", type=int, default=0)
     parser.add_argument("--adjudicate", action="store_true")
     parser.add_argument("--adjudicate-eval", type=int, default=500)
@@ -499,6 +501,8 @@ def main() -> None:
         args.evaluation_mode,
         args.neural_value_weight,
         max(1, args.neural_value_scale),
+        max(1, args.mcts_simulations),
+        args.mcts_cpuct,
     )
     adjudication = AdjudicationConfig(
         enabled=args.adjudicate,

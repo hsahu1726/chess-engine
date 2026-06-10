@@ -18,6 +18,9 @@ class UciSession:
     output_stream: TextIO = sys.stdout
     board: chess.Board = field(default_factory=chess.Board)
     engine: SearchEngine = field(default_factory=SearchEngine)
+    mcts_policy_value: object | None = None
+    mcts_simulations: int = 100
+    mcts_cpuct: float = 1.5
 
     def write(self, line: str) -> None:
         self.output_stream.write(f"{line}\n")
@@ -87,6 +90,10 @@ class UciSession:
             self.board.push(move)
 
     def go(self, args: str) -> None:
+        if self.mcts_policy_value is not None:
+            self.go_mcts()
+            return
+
         depth = parse_go_depth(args)
         movetime_ms = parse_go_movetime(args)
         if movetime_ms is None:
@@ -107,6 +114,25 @@ class UciSession:
                     f"{pv_text}"
                 )
             self.write(f"bestmove {move.uci()}")
+
+    def go_mcts(self) -> None:
+        from chess_engine_2.mcts import MCTSEngine
+
+        engine = MCTSEngine(
+            self.mcts_policy_value,
+            simulations=max(1, self.mcts_simulations),
+            cpuct=max(0.01, self.mcts_cpuct),
+        )
+        result = engine.search(self.board)
+        if result.move is None:
+            self.write("bestmove 0000")
+            return
+
+        self.write(
+            f"info string mcts simulations {result.simulations} "
+            f"root_value {result.root_value:.3f}"
+        )
+        self.write(f"bestmove {result.move.uci()}")
 
 
 def parse_go_depth(args: str) -> int | None:
@@ -208,6 +234,7 @@ def build_engine(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run Chess Engine 2 as a UCI engine.")
+    parser.add_argument("--search-backend", choices=["alphabeta", "mcts"], default="alphabeta")
     parser.add_argument("--neural-checkpoint", type=Path)
     parser.add_argument("--neural-channels", type=int, default=32)
     parser.add_argument("--neural-ordering", choices=["root", "depth", "all"], default="root")
@@ -216,7 +243,20 @@ def main() -> None:
     parser.add_argument("--evaluation-mode", choices=["classical", "neural", "blend"], default="classical")
     parser.add_argument("--neural-value-weight", type=float, default=0.2)
     parser.add_argument("--neural-value-scale", type=int, default=1000)
+    parser.add_argument("--mcts-simulations", type=int, default=100)
+    parser.add_argument("--mcts-cpuct", type=float, default=1.5)
     args = parser.parse_args()
+
+    mcts_policy_value = None
+    if args.search_backend == "mcts":
+        if args.neural_checkpoint is None:
+            raise ValueError("MCTS UCI backend requires --neural-checkpoint")
+        from chess_engine_2.mcts import NeuralPolicyValue
+
+        mcts_policy_value = NeuralPolicyValue.from_checkpoint(
+            args.neural_checkpoint,
+            max(1, args.neural_channels),
+        )
 
     UciSession(
         engine=build_engine(
@@ -228,7 +268,10 @@ def main() -> None:
             args.evaluation_mode,
             args.neural_value_weight,
             args.neural_value_scale,
-        )
+        ),
+        mcts_policy_value=mcts_policy_value,
+        mcts_simulations=max(1, args.mcts_simulations),
+        mcts_cpuct=args.mcts_cpuct,
     ).run()
 
 

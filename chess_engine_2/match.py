@@ -212,6 +212,31 @@ class NeuralPolicyPlayer:
         return move
 
 
+@dataclass
+class MCTSPlayer:
+    name: str
+    checkpoint: Path
+    channels: int = 32
+    simulations: int = 100
+    cpuct: float = 1.5
+    stats: PlayerStats = field(default_factory=PlayerStats)
+    policy_value: object = field(init=False)
+
+    def __post_init__(self) -> None:
+        from chess_engine_2.mcts import NeuralPolicyValue
+
+        self.policy_value = NeuralPolicyValue.from_checkpoint(self.checkpoint, self.channels)
+
+    def choose_move(self, board: chess.Board) -> chess.Move | None:
+        from chess_engine_2.mcts import MCTSEngine
+
+        start = time.perf_counter()
+        engine = MCTSEngine(self.policy_value, simulations=self.simulations, cpuct=self.cpuct)
+        result = engine.search(board)
+        self.stats.record(0, result.simulations, time.perf_counter() - start)
+        return result.move
+
+
 @dataclass(frozen=True)
 class AdjudicationConfig:
     enabled: bool = False
@@ -531,6 +556,8 @@ def build_player(
     evaluation_mode: str = "classical",
     neural_value_weight: float = 0.2,
     neural_value_scale: int = 1000,
+    mcts_simulations: int = 100,
+    mcts_cpuct: float = 1.5,
 ) -> Player:
     if kind == "random":
         return RandomPlayer()
@@ -538,6 +565,16 @@ def build_player(
         if neural_checkpoint is None:
             raise ValueError("neural player requires a neural checkpoint")
         return NeuralPolicyPlayer("neural-policy", neural_checkpoint, neural_channels)
+    if kind == "mcts":
+        if neural_checkpoint is None:
+            raise ValueError("mcts player requires a neural checkpoint")
+        return MCTSPlayer(
+            f"mcts-{mcts_simulations}",
+            neural_checkpoint,
+            neural_channels,
+            max(1, mcts_simulations),
+            max(0.01, mcts_cpuct),
+        )
     if kind == "search":
         suffix = f"-{movetime_ms}ms" if movetime_ms is not None else ""
         mobility_suffix = "" if use_mobility else "-no-mobility"
@@ -563,8 +600,8 @@ def build_player(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run engine-vs-engine matches.")
-    parser.add_argument("--a", choices=["search", "random", "neural"], default="search")
-    parser.add_argument("--b", choices=["search", "random", "neural"], default="random")
+    parser.add_argument("--a", choices=["search", "random", "neural", "mcts"], default="search")
+    parser.add_argument("--b", choices=["search", "random", "neural", "mcts"], default="random")
     parser.add_argument("--a-depth", type=int, default=2)
     parser.add_argument("--b-depth", type=int, default=1)
     parser.add_argument("--a-movetime", type=int)
@@ -582,6 +619,8 @@ def main() -> None:
     parser.add_argument("--evaluation-mode", choices=["classical", "neural", "blend"], default="classical")
     parser.add_argument("--neural-value-weight", type=float, default=0.2)
     parser.add_argument("--neural-value-scale", type=int, default=1000)
+    parser.add_argument("--mcts-simulations", type=int, default=100)
+    parser.add_argument("--mcts-cpuct", type=float, default=1.5)
     parser.add_argument("--no-mobility", action="store_true")
     parser.add_argument("--games", type=int, default=2)
     parser.add_argument("--max-plies", type=int, default=200)
@@ -612,6 +651,8 @@ def main() -> None:
         args.evaluation_mode,
         args.neural_value_weight,
         max(1, args.neural_value_scale),
+        max(1, args.mcts_simulations),
+        args.mcts_cpuct,
     )
     player_b = build_player(
         args.b,
@@ -628,6 +669,8 @@ def main() -> None:
         args.evaluation_mode,
         args.neural_value_weight,
         max(1, args.neural_value_scale),
+        max(1, args.mcts_simulations),
+        args.mcts_cpuct,
     )
     result = play_match(
         player_a,
