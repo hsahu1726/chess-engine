@@ -27,7 +27,11 @@ alpha-beta search, supervised policy/value training, and eventually PUCT MCTS.
 17. Value network inside search. Done.
 18. GPU 10,000-game training with validation and tensor caching. Done.
 19. PUCT MCTS prototype. Done.
-20. Self-play training loop.
+20. MCTS simulation scaling study. Done.
+21. Higher-rated training data.
+22. Improved value targets.
+23. Residual policy/value network.
+24. Self-play training loop.
 
 ## Setup
 
@@ -164,6 +168,15 @@ Run the Phase 13 PUCT/MCTS prototype:
 ```powershell
 python -m chess_engine_2.match --a mcts --a-neural-checkpoint models/policy_value_phase12_10000.pt --b random --games 4 --max-plies 80 --mcts-simulations 100 --mcts-cpuct 1.5
 ```
+
+Run the Phase 14 MCTS scaling study against depth-1 alpha-beta:
+
+```powershell
+python -m chess_engine_2.mcts_benchmark models/policy_value_phase12_10000.pt --simulations 64 128 256 512 --games 2 --opponent-depth 1 --qdepth 2 --opening-plies 4 --max-plies 200 --adjudicate
+```
+
+The scaling study resets the opening seed for every simulation count and writes
+both CSV and JSON results.
 
 Experiment with the value head inside search:
 

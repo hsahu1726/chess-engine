@@ -10,6 +10,7 @@ build/
 match_smoke.pgn
 match_*.pgn
 benchmark*.csv
+benchmark*.json
 *.log
 data/raw/
 data/processed/
