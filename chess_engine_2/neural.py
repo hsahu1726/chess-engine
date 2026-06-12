@@ -14,6 +14,41 @@ from chess_engine_2.data.dataset import INPUT_PLANES, board_to_planes
 from chess_engine_2.encoding import POLICY_SIZE, move_to_policy_index
 
 
+VALUE_TARGETS = (
+    "value",
+    "discounted_value",
+    "material_value",
+    "classical_value",
+    "blend",
+    "result_material_blend",
+    "result_classical_blend",
+    "discounted_classical_blend",
+)
+
+
+def value_target_from_sample(
+    sample: dict[str, Any],
+    value_target: str,
+    primary_weight: float = 0.5,
+) -> float:
+    blend_fields = {
+        "blend": ("value", "classical_value"),
+        "result_material_blend": ("value", "material_value"),
+        "result_classical_blend": ("value", "classical_value"),
+        "discounted_classical_blend": ("discounted_value", "classical_value"),
+    }
+    if value_target in blend_fields:
+        primary, secondary = blend_fields[value_target]
+        missing = [field for field in (primary, secondary) if field not in sample]
+        if missing:
+            raise ValueError(f"{value_target} requires {', '.join(missing)}")
+        weight = max(0.0, min(1.0, primary_weight))
+        return weight * float(sample[primary]) + (1.0 - weight) * float(sample[secondary])
+    if value_target not in sample:
+        raise ValueError(f"value target {value_target!r} is missing from sample")
+    return float(sample[value_target])
+
+
 @dataclass(frozen=True)
 class TrainingMetrics:
     samples: int
@@ -89,8 +124,16 @@ class NeuralValueEvaluator:
 
 
 class ChessJsonlDataset(Dataset):
-    def __init__(self, path: Path, max_samples: int | None = None):
+    def __init__(
+        self,
+        path: Path,
+        max_samples: int | None = None,
+        value_target: str = "value",
+        result_weight: float = 0.5,
+    ):
         self.samples = []
+        self.value_target = value_target
+        self.result_weight = result_weight
         with path.open("r", encoding="utf-8") as stream:
             for line in stream:
                 if not line.strip():
@@ -107,8 +150,11 @@ class ChessJsonlDataset(Dataset):
         board = chess.Board(sample["fen"])
         planes = torch.tensor(board_to_planes(board), dtype=torch.float32)
         policy = torch.tensor(int(sample["policy_index"]), dtype=torch.long)
-        value = torch.tensor(float(sample["value"]), dtype=torch.float32)
+        value = torch.tensor(self.value_from_sample(sample), dtype=torch.float32)
         return planes, policy, value
+
+    def value_from_sample(self, sample: dict[str, Any]) -> float:
+        return value_target_from_sample(sample, self.value_target, self.result_weight)
 
 
 class PolicyValueNet(nn.Module):
@@ -151,8 +197,12 @@ def train_one_epoch(
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     value_loss_weight: float = 1.0,
+    value_head_only: bool = False,
 ) -> TrainingMetrics:
     model.train()
+    if value_head_only:
+        model.trunk.eval()
+        model.policy_head.eval()
     policy_loss_fn = nn.CrossEntropyLoss()
     value_loss_fn = nn.MSELoss()
 

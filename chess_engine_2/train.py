@@ -11,7 +11,16 @@ from torch.utils.data import Dataset
 from torch.utils.data import DataLoader, random_split
 
 from chess_engine_2.data.dataset import INPUT_PLANES, board_to_planes
-from chess_engine_2.neural import ChessJsonlDataset, PolicyValueNet, evaluate_model, save_checkpoint, train_one_epoch
+from chess_engine_2.neural import (
+    ChessJsonlDataset,
+    PolicyValueNet,
+    VALUE_TARGETS,
+    evaluate_model,
+    load_checkpoint,
+    save_checkpoint,
+    train_one_epoch,
+    value_target_from_sample,
+)
 
 
 class CachedTensorDataset(Dataset):
@@ -27,7 +36,13 @@ class CachedTensorDataset(Dataset):
         return self.planes[index].float(), self.policies[index].long(), self.values[index].float()
 
 
-def build_tensor_cache(jsonl: Path, cache_path: Path, max_samples: int | None) -> CachedTensorDataset:
+def build_tensor_cache(
+    jsonl: Path,
+    cache_path: Path,
+    max_samples: int | None,
+    value_target: str = "value",
+    result_weight: float = 0.5,
+) -> CachedTensorDataset:
     sample_count = 0
     with jsonl.open("r", encoding="utf-8") as stream:
         for line in stream:
@@ -52,7 +67,7 @@ def build_tensor_cache(jsonl: Path, cache_path: Path, max_samples: int | None) -
             board = chess.Board(sample["fen"])
             planes[sample_index] = torch.tensor(board_to_planes(board), dtype=torch.uint8)
             policies[sample_index] = int(sample["policy_index"])
-            values[sample_index] = float(sample["value"])
+            values[sample_index] = target_value(sample, value_target, result_weight)
             sample_index += 1
             if sample_index % 50000 == 0:
                 print(f"cached samples: {sample_index}", flush=True)
@@ -65,6 +80,8 @@ def build_tensor_cache(jsonl: Path, cache_path: Path, max_samples: int | None) -
         {
             "source": str(jsonl),
             "max_samples": max_samples,
+            "value_target": value_target,
+            "result_weight": result_weight,
             "planes": dataset.planes,
             "policies": dataset.policies,
             "values": dataset.values,
@@ -74,15 +91,38 @@ def build_tensor_cache(jsonl: Path, cache_path: Path, max_samples: int | None) -
     return dataset
 
 
-def load_tensor_cache(jsonl: Path, cache_path: Path, max_samples: int | None, rebuild: bool) -> CachedTensorDataset:
+def load_tensor_cache(
+    jsonl: Path,
+    cache_path: Path,
+    max_samples: int | None,
+    rebuild: bool,
+    value_target: str = "value",
+    result_weight: float = 0.5,
+) -> CachedTensorDataset:
     if not rebuild and cache_path.exists():
         cache = torch.load(cache_path, map_location=torch.device("cpu"))
-        if cache.get("source") == str(jsonl) and cache.get("max_samples") == max_samples:
+        if (
+            cache.get("source") == str(jsonl)
+            and cache.get("max_samples") == max_samples
+            and cache.get("value_target", "value") == value_target
+            and cache.get("result_weight", 0.5) == result_weight
+        ):
             return CachedTensorDataset(cache["planes"], cache["policies"], cache["values"])
         print("tensor cache metadata mismatch; rebuilding", flush=True)
 
     print(f"building tensor cache: {cache_path}", flush=True)
-    return build_tensor_cache(jsonl, cache_path, max_samples)
+    return build_tensor_cache(jsonl, cache_path, max_samples, value_target, result_weight)
+
+
+def target_value(sample: dict, value_target: str, result_weight: float = 0.5) -> float:
+    return value_target_from_sample(sample, value_target, result_weight)
+
+
+def configure_value_head_only(model: PolicyValueNet) -> None:
+    for parameter in model.parameters():
+        parameter.requires_grad = False
+    for parameter in model.value_head.parameters():
+        parameter.requires_grad = True
 
 
 def main() -> None:
@@ -94,11 +134,19 @@ def main() -> None:
     parser.add_argument("--channels", type=int, default=64)
     parser.add_argument("--learning-rate", type=float, default=0.001)
     parser.add_argument("--checkpoint", type=Path, default=Path("models/policy_value.pt"))
+    parser.add_argument("--initial-checkpoint", type=Path)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--validation-split", type=float, default=0.1)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--tensor-cache", type=Path)
     parser.add_argument("--rebuild-cache", action="store_true")
+    parser.add_argument(
+        "--value-target",
+        choices=VALUE_TARGETS,
+        default="value",
+    )
+    parser.add_argument("--result-weight", type=float, default=0.5)
+    parser.add_argument("--value-head-only", action="store_true")
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -106,9 +154,16 @@ def main() -> None:
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if args.tensor_cache is not None:
-        dataset = load_tensor_cache(args.jsonl, args.tensor_cache, args.max_samples, args.rebuild_cache)
+        dataset = load_tensor_cache(
+            args.jsonl,
+            args.tensor_cache,
+            args.max_samples,
+            args.rebuild_cache,
+            args.value_target,
+            args.result_weight,
+        )
     else:
-        dataset = ChessJsonlDataset(args.jsonl, args.max_samples)
+        dataset = ChessJsonlDataset(args.jsonl, args.max_samples, args.value_target, args.result_weight)
     if len(dataset) == 0:
         raise ValueError("dataset contains no samples")
 
@@ -144,7 +199,14 @@ def main() -> None:
     )
 
     model = PolicyValueNet(channels=args.channels).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
+    if args.initial_checkpoint is not None:
+        load_checkpoint(args.initial_checkpoint, model, device)
+    if args.value_head_only:
+        configure_value_head_only(model)
+    optimizer = torch.optim.AdamW(
+        (parameter for parameter in model.parameters() if parameter.requires_grad),
+        lr=args.learning_rate,
+    )
 
     metrics = []
     validation_metrics = []
@@ -154,7 +216,13 @@ def main() -> None:
     print(f"validation samples: {len(validation_dataset) if validation_dataset is not None else 0}", flush=True)
     print(f"num workers: {args.num_workers}", flush=True)
     for epoch in range(1, args.epochs + 1):
-        metric = train_one_epoch(model, loader, optimizer, device)
+        metric = train_one_epoch(
+            model,
+            loader,
+            optimizer,
+            device,
+            value_head_only=args.value_head_only,
+        )
         metrics.append(metric)
         print(
             f"epoch {epoch}: total_loss={metric.total_loss:.4f} "
@@ -187,6 +255,10 @@ def main() -> None:
             "seed": args.seed,
             "validation_split": args.validation_split,
             "num_workers": args.num_workers,
+            "value_target": args.value_target,
+            "result_weight": args.result_weight,
+            "initial_checkpoint": str(args.initial_checkpoint) if args.initial_checkpoint is not None else None,
+            "value_head_only": args.value_head_only,
         },
         validation_metrics=validation_metrics,
     )
