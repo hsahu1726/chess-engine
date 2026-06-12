@@ -42,6 +42,11 @@ class JsonlSample:
     move_uci: str
     policy_index: int
     value: float
+    material_value: float | None = None
+    classical_value: float | None = None
+    discounted_value: float | None = None
+    ply: int | None = None
+    game_plies: int | None = None
 
 
 @dataclass(frozen=True)
@@ -57,6 +62,11 @@ def sample_from_dict(row: dict[str, Any]) -> JsonlSample:
         move_uci=str(row["move_uci"]),
         policy_index=int(row["policy_index"]),
         value=float(row["value"]),
+        material_value=float(row["material_value"]) if "material_value" in row else None,
+        classical_value=float(row["classical_value"]) if "classical_value" in row else None,
+        discounted_value=float(row["discounted_value"]) if "discounted_value" in row else None,
+        ply=int(row["ply"]) if "ply" in row else None,
+        game_plies=int(row["game_plies"]) if "game_plies" in row else None,
     )
 
 
@@ -109,6 +119,17 @@ def validate_sample(sample: JsonlSample) -> None:
         raise ValueError(f"policy index out of range: {sample.policy_index}")
     if sample.value < -1.0 or sample.value > 1.0:
         raise ValueError(f"value out of range: {sample.value}")
+    for name, target in (
+        ("material_value", sample.material_value),
+        ("classical_value", sample.classical_value),
+        ("discounted_value", sample.discounted_value),
+    ):
+        if target is not None and (target < -1.0 or target > 1.0):
+            raise ValueError(f"{name} out of range: {target}")
+    if (sample.ply is None) != (sample.game_plies is None):
+        raise ValueError("ply and game_plies must be provided together")
+    if sample.ply is not None and not 1 <= sample.ply <= sample.game_plies:
+        raise ValueError(f"invalid game progress: ply {sample.ply} of {sample.game_plies}")
 
     board = chess.Board(sample.fen)
     move = chess.Move.from_uci(sample.move_uci)
