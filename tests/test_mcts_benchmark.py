@@ -40,6 +40,9 @@ def test_row_from_match_collects_scaling_metrics() -> None:
     assert row.average_plies == 50.0
     assert row.average_simulations_per_move == 64.0
     assert row.simulations_per_second == 64.0
+    assert row.average_network_evaluations_per_move == 0.0
+    assert row.average_cache_hits_per_move == 0.0
+    assert row.cache_hit_percent == 0.0
     assert row.terminations == {"checkmate": 1, "threefold_repetition": 1}
 
 
@@ -56,6 +59,9 @@ def test_scaling_results_save_as_csv_and_json(tmp_path) -> None:
         elapsed_seconds=10.0,
         average_simulations_per_move=64.0,
         simulations_per_second=70.0,
+        average_network_evaluations_per_move=50.0,
+        average_cache_hits_per_move=15.0,
+        cache_hit_percent=23.1,
         opponent_average_nodes=80.0,
         opponent_nodes_per_second=1500.0,
         terminations={"checkmate": 2},
@@ -71,5 +77,5 @@ def test_scaling_results_save_as_csv_and_json(tmp_path) -> None:
     json_data = json.loads(json_path.read_text(encoding="utf-8"))
 
     assert csv_rows[0]["simulations"] == "64"
-    assert json_data["experiment"] == "Phase 14 MCTS scaling study"
+    assert json_data["experiment"] == "MCTS inference scaling study"
     assert json_data["results"][0]["score_percent"] == 50.0

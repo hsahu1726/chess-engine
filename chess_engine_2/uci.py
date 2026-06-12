@@ -130,7 +130,8 @@ class UciSession:
 
         self.write(
             f"info string mcts simulations {result.simulations} "
-            f"root_value {result.root_value:.3f}"
+            f"root_value {result.root_value:.3f} "
+            f"network_evaluations {result.network_evaluations} cache_hits {result.cache_hits}"
         )
         self.write(f"bestmove {result.move.uci()}")
 
@@ -245,6 +246,7 @@ def main() -> None:
     parser.add_argument("--neural-value-scale", type=int, default=1000)
     parser.add_argument("--mcts-simulations", type=int, default=100)
     parser.add_argument("--mcts-cpuct", type=float, default=1.5)
+    parser.add_argument("--mcts-cache-size", type=int, default=100_000)
     args = parser.parse_args()
 
     mcts_policy_value = None
@@ -256,6 +258,7 @@ def main() -> None:
         mcts_policy_value = NeuralPolicyValue.from_checkpoint(
             args.neural_checkpoint,
             max(1, args.neural_channels),
+            cache_size=max(0, args.mcts_cache_size),
         )
 
     UciSession(

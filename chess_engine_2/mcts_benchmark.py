@@ -24,6 +24,9 @@ class MCTSScalingRow:
     elapsed_seconds: float
     average_simulations_per_move: float
     simulations_per_second: float
+    average_network_evaluations_per_move: float
+    average_cache_hits_per_move: float
+    cache_hit_percent: float
     opponent_average_nodes: float
     opponent_nodes_per_second: float
     terminations: dict[str, int]
@@ -40,6 +43,10 @@ def parse_simulations(values: list[str]) -> list[int]:
 
 def row_from_match(simulations: int, match: MatchResult, elapsed_seconds: float) -> MCTSScalingRow:
     games = len(match.games)
+    cache_requests = (
+        match.player_a_stats.total_neural_value_evaluations
+        + match.player_a_stats.total_neural_value_cache_hits
+    )
     return MCTSScalingRow(
         simulations=simulations,
         games=games,
@@ -52,6 +59,13 @@ def row_from_match(simulations: int, match: MatchResult, elapsed_seconds: float)
         elapsed_seconds=elapsed_seconds,
         average_simulations_per_move=match.player_a_stats.average_nodes,
         simulations_per_second=match.player_a_stats.nodes_per_second,
+        average_network_evaluations_per_move=match.player_a_stats.average_neural_value_evaluations,
+        average_cache_hits_per_move=match.player_a_stats.average_neural_value_cache_hits,
+        cache_hit_percent=(
+            match.player_a_stats.total_neural_value_cache_hits / cache_requests * 100
+            if cache_requests
+            else 0.0
+        ),
         opponent_average_nodes=match.player_b_stats.average_nodes,
         opponent_nodes_per_second=match.player_b_stats.nodes_per_second,
         terminations=match.termination_counts,
@@ -69,6 +83,7 @@ def run_scaling_study(
     opening_plies: int = 4,
     quiescence_depth: int = 2,
     seed: int = 1,
+    cache_size: int = 100_000,
     adjudication: AdjudicationConfig | None = None,
 ) -> list[MCTSScalingRow]:
     rows = []
@@ -80,6 +95,7 @@ def run_scaling_study(
             channels=channels,
             simulations=simulations,
             cpuct=cpuct,
+            cache_size=cache_size,
         )
         opponent = SearchPlayer(
             name=f"search-depth-{opponent_depth}",
@@ -104,11 +120,11 @@ def run_scaling_study(
 def format_rows(rows: list[MCTSScalingRow]) -> str:
     header = (
         " simulations | games | wins | losses | draws | score% | avg plies | elapsed | "
-        "sims/move | sims/sec | opp nodes | opp nps | terminations"
+        "sims/move | sims/sec | eval/move | hits/move | hit% | opp nodes | opp nps | terminations"
     )
     divider = (
         "-------------|-------|------|--------|-------|--------|-----------|---------|"
-        "-----------|----------|-----------|---------|-------------"
+        "-----------|----------|-----------|-----------|------|-----------|---------|-------------"
     )
     lines = [header, divider]
     for row in rows:
@@ -117,7 +133,10 @@ def format_rows(rows: list[MCTSScalingRow]) -> str:
             f"{row.simulations:>12} | {row.games:>5} | {row.wins:>4} | {row.losses:>6} | "
             f"{row.draws:>5} | {row.score_percent:>6.1f}% | {row.average_plies:>9.1f} | "
             f"{row.elapsed_seconds:>7.1f}s | {row.average_simulations_per_move:>9.0f} | "
-            f"{row.simulations_per_second:>8.1f} | {row.opponent_average_nodes:>9.0f} | "
+            f"{row.simulations_per_second:>8.1f} | "
+            f"{row.average_network_evaluations_per_move:>9.1f} | "
+            f"{row.average_cache_hits_per_move:>9.1f} | {row.cache_hit_percent:>4.1f}% | "
+            f"{row.opponent_average_nodes:>9.0f} | "
             f"{row.opponent_nodes_per_second:>7.0f} | {terminations}"
         )
     return "\n".join(lines)
@@ -137,6 +156,9 @@ def save_csv(rows: list[MCTSScalingRow], path: Path) -> None:
         "elapsed_seconds",
         "average_simulations_per_move",
         "simulations_per_second",
+        "average_network_evaluations_per_move",
+        "average_cache_hits_per_move",
+        "cache_hit_percent",
         "opponent_average_nodes",
         "opponent_nodes_per_second",
         "terminations",
@@ -155,7 +177,7 @@ def save_json(rows: list[MCTSScalingRow], path: Path, configuration: dict[str, o
     path.write_text(
         json.dumps(
             {
-                "experiment": "Phase 14 MCTS scaling study",
+                "experiment": "MCTS inference scaling study",
                 "configuration": configuration,
                 "results": [asdict(row) for row in rows],
             },
@@ -178,6 +200,7 @@ def main() -> None:
     parser.add_argument("--opening-plies", type=int, default=4)
     parser.add_argument("--qdepth", type=int, default=2)
     parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--cache-size", type=int, default=100_000)
     parser.add_argument("--adjudicate", action="store_true")
     parser.add_argument("--adjudicate-eval", type=int, default=500)
     parser.add_argument("--adjudicate-eval-plies", type=int, default=8)
@@ -208,6 +231,7 @@ def main() -> None:
         "opening_plies": max(0, args.opening_plies),
         "quiescence_depth": max(0, args.qdepth),
         "seed": args.seed,
+        "cache_size": max(0, args.cache_size),
         "adjudication": asdict(adjudication),
     }
     rows = run_scaling_study(
@@ -221,6 +245,7 @@ def main() -> None:
         opening_plies=max(0, args.opening_plies),
         quiescence_depth=max(0, args.qdepth),
         seed=args.seed,
+        cache_size=max(0, args.cache_size),
         adjudication=adjudication,
     )
     save_csv(rows, args.csv)

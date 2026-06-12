@@ -472,6 +472,7 @@ def main() -> None:
     parser.add_argument("--neural-value-scale", type=int, default=1000)
     parser.add_argument("--mcts-simulations", type=int, default=100)
     parser.add_argument("--mcts-cpuct", type=float, default=1.5)
+    parser.add_argument("--mcts-cache-size", type=int, default=100_000)
     parser.add_argument("--opening-plies", type=int, default=0)
     parser.add_argument("--adjudicate", action="store_true")
     parser.add_argument("--adjudicate-eval", type=int, default=500)
@@ -503,6 +504,7 @@ def main() -> None:
         max(1, args.neural_value_scale),
         max(1, args.mcts_simulations),
         args.mcts_cpuct,
+        max(0, args.mcts_cache_size),
     )
     adjudication = AdjudicationConfig(
         enabled=args.adjudicate,

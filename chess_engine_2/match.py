@@ -219,13 +219,18 @@ class MCTSPlayer:
     channels: int = 32
     simulations: int = 100
     cpuct: float = 1.5
+    cache_size: int = 100_000
     stats: PlayerStats = field(default_factory=PlayerStats)
     policy_value: object = field(init=False)
 
     def __post_init__(self) -> None:
         from chess_engine_2.mcts import NeuralPolicyValue
 
-        self.policy_value = NeuralPolicyValue.from_checkpoint(self.checkpoint, self.channels)
+        self.policy_value = NeuralPolicyValue.from_checkpoint(
+            self.checkpoint,
+            self.channels,
+            cache_size=self.cache_size,
+        )
 
     def choose_move(self, board: chess.Board) -> chess.Move | None:
         from chess_engine_2.mcts import MCTSEngine
@@ -233,7 +238,13 @@ class MCTSPlayer:
         start = time.perf_counter()
         engine = MCTSEngine(self.policy_value, simulations=self.simulations, cpuct=self.cpuct)
         result = engine.search(board)
-        self.stats.record(0, result.simulations, time.perf_counter() - start)
+        self.stats.record(
+            0,
+            result.simulations,
+            time.perf_counter() - start,
+            neural_value_evaluations=result.network_evaluations,
+            neural_value_cache_hits=result.cache_hits,
+        )
         return result.move
 
 
@@ -558,6 +569,7 @@ def build_player(
     neural_value_scale: int = 1000,
     mcts_simulations: int = 100,
     mcts_cpuct: float = 1.5,
+    mcts_cache_size: int = 100_000,
 ) -> Player:
     if kind == "random":
         return RandomPlayer()
@@ -574,6 +586,7 @@ def build_player(
             neural_channels,
             max(1, mcts_simulations),
             max(0.01, mcts_cpuct),
+            max(0, mcts_cache_size),
         )
     if kind == "search":
         suffix = f"-{movetime_ms}ms" if movetime_ms is not None else ""
@@ -621,6 +634,7 @@ def main() -> None:
     parser.add_argument("--neural-value-scale", type=int, default=1000)
     parser.add_argument("--mcts-simulations", type=int, default=100)
     parser.add_argument("--mcts-cpuct", type=float, default=1.5)
+    parser.add_argument("--mcts-cache-size", type=int, default=100_000)
     parser.add_argument("--no-mobility", action="store_true")
     parser.add_argument("--games", type=int, default=2)
     parser.add_argument("--max-plies", type=int, default=200)
@@ -653,6 +667,7 @@ def main() -> None:
         max(1, args.neural_value_scale),
         max(1, args.mcts_simulations),
         args.mcts_cpuct,
+        max(0, args.mcts_cache_size),
     )
     player_b = build_player(
         args.b,
@@ -671,6 +686,7 @@ def main() -> None:
         max(1, args.neural_value_scale),
         max(1, args.mcts_simulations),
         args.mcts_cpuct,
+        max(0, args.mcts_cache_size),
     )
     result = play_match(
         player_a,
